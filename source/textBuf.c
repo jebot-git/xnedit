@@ -31,7 +31,12 @@
 #endif
 
 #include "textBuf.h"
+#ifndef XNEDIT_FLTK
 #include "rangeset.h"
+#else
+#define True 1
+#define False 0
+#endif
 #include "../util/nedit_malloc.h"
 
 #include <stdio.h>
@@ -202,8 +207,10 @@ void BufFree(textBuffer *buf)
         NEditFree(buf->modifyProcs);
         NEditFree(buf->cbArgs);
     }
+#ifndef XNEDIT_FLTK
     if (buf->rangesetTable)
-    RangesetTableFree(buf->rangesetTable);
+        RangesetTableFree(buf->rangesetTable);
+#endif
     if (buf->nPreDeleteProcs != 0) {
         NEditFree(buf->preDeleteProcs);
         NEditFree(buf->preDeleteCbArgs);

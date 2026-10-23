@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=XNEdit XR
+Comment=Native FLTK text and source editor
+Exec=xnedit %F
+Icon=accessories-text-editor
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;text/markdown;text/x-log;text/x-c;text/x-chdr;text/x-c++;text/x-c++hdr;text/x-python;text/x-shellscript;text/x-makefile;text/x-cmake;text/x-java;text/x-java-source;text/x-rust;text/x-go;text/x-lua;text/x-perl;text/x-ruby;text/x-pascal;text/x-tex;text/x-diff;text/x-patch;text/x-csrc;text/x-c++src;text/x-csh;text/x-tcl;text/x-objcsrc;text/x-ocaml;text/x-sql;text/csv;text/tab-separated-values;text/css;text/javascript;application/javascript;application/json;application/xml;text/xml;application/x-yaml;text/yaml;application/toml;text/x-toml;application/x-shellscript;application/x-desktop;
+StartupWMClass=org.domed.XNEdit

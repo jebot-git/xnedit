@@ -1,196 +1,99 @@
-XNEdit Version 1.6, December 2024
-=================================
+# XNEdit XR
 
-XNEdit is a multi-purpose text editor for the X Window System, which combines
-a standard, easy to use, graphical user interface with the thorough
-functionality and stability required by users who edit text eight hours a day.
-It provides intensive support for development in a wide variety of languages,
-text processors, and other tools, but at the same time can be used productively
-by just about anyone who needs to edit text.
+Native FLTK text editor for DomeD, forked from [unixwork/xnedit](https://github.com/unixwork/xnedit).
+The upstream history and legacy frontend are retained. This frontend uses XNEdit's
+text buffer, UTF-8 utilities, regular-expression engine and EditorConfig parser;
+it does not link Motif or Xt. The default build requires Wayland. X11 is an
+explicit build option and never an automatic fallback.
 
-XNEdit is a fork of the Nirvana Editor (NEdit) and provides new functionality
-like antialiased text rendering and support for unicode.
+## Build
 
-BUILDING XNEDIT
----------------
+Use the de-xr patched FLTK 1.4.5 toolkit, including native BDF rendering and glyph
+fallback. Build as your regular user:
 
-Pre-built executables will be available for many operating system. Check out
-the [XNEdit web page](https://www.unixwork.de/xnedit/).
+```sh
+cmake -S . -B build-fltk -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DFLTK_DIR=/opt/fltk-vr/toolkit/share/fltk
+cmake --build build-fltk --parallel 4
+ctest --test-dir build-fltk --output-on-failure
+```
 
-If you have downloaded a pre-built executable you can skip ahead to the section
-called INSTALLATION. Otherwise, the requirements to build XNEdit from the
-sources are:
+`make` also builds this FLTK frontend. The upstream Motif build is available only
+through explicit legacy targets such as `make legacy` / `make linux`.
 
- - ANSI C99 compiler
- - make utility (eg, GNU make)
- - pkg-config
- - X11 development stuff (headers, libraries)
- - Xrender and Xft
- - iconv (*BSD, cygwin)
- - Fontconfig
- - Motif 2.0 or above
- 
-Optionally one may use:
- 
- - yacc (or GNU bison)
- 
-You can install all necessary dependencies with the following command.
+To opt into X11 support, use a separate build with `-DXNEDIT_ENABLE_X11=ON`.
+That build still defaults to Wayland; select X11 with `--x11` or
+`FLTK_BACKEND=x11`. The default binary rejects both forms of X11 selection.
+The shared workspace FLTK library may contain both platform drivers, but the
+application's X11 association code and dependencies are compiled only when opted in.
 
-Debian/Ubuntu:
+## Editing
 
-    apt install gcc make pkgconf libmotif-dev
+- Multiple independent document tabs, split views, line numbers, wrapping, syntax
+  colors, bracket matching, indentation, duplicate/delete line, and read-only mode.
+- XNEdit-buffer-backed undo/redo. Literal search supports Unicode case-insensitive
+  matching; regex search, lookaround and captured replacement use the upstream engine.
+- UTF-8, UTF-16LE/BE and explicitly selected legacy encodings; BOM and LF/CRLF/CR
+  line endings survive load/save. Invalid text is rejected rather than silently
+  replaced. Open with Encoding supports additional GLib conversion encodings.
+- Atomic saves preserve existing file permissions, detect changes on disk before
+  replacing a file, and support symlink targets. The interactive size limit is 64 MiB.
+- The upstream EditorConfig parser supplies indentation, tab width, encoding and
+  line endings. As upstream, trimming trailing whitespace/final-newline properties
+  are not implemented by that parser.
+- Recent files and window size are stored in `$XDG_CONFIG_HOME/xnedit-xr/settings.json`.
+  Recovery copies of modified buffers are written every five seconds under
+  `$XDG_STATE_HOME/xnedit-xr/recovery`, with private permissions. A subsequent launch
+  offers recovery after the owning process has exited. Closing a dirty document
+  requires Save, Discard or Cancel.
+- Native clipboard and primary-selection paste use FLTK. Scrolling follows normal
+  desktop direction. Font, native bitmap strike, palette and accent follow DomeD.
 
-EL/Fedora:
+DomeD draws the exported universal menu. The local menu collapses only after a
+working host and window association exist, and returns if the host disappears.
+Shortcuts continue to work while the menu is external. Ctrl+N/O/S/W/Q manage files,
+Ctrl+Z / Ctrl+Shift+Z undo/redo, Ctrl+F/H find/replace, F3 / Shift+F3 search,
+Ctrl+L goes to a line, and Ctrl+PageUp/PageDown changes tabs. Escape closes search;
+it does not quit the editor. Super shortcuts remain owned by DomeD.
 
-    dnf install gcc make pkgconf motif-devel
+```sh
+xnedit file.txt other.py
+xnedit +120 source.c
+xnedit --read-only notes.txt
+xnedit --encoding WINDOWS-1252 legacy.txt
+xnedit --version
+xnedit --build-options
+```
 
-openSUSE:
+## Scope
 
-    zypper install gcc make pkg-config motif-devel
+Remote `xnc` and the NEdit macro language/interpreter are outside this fork's
+scope. The new frontend does not currently expose rectangular selection or the
+legacy custom highlight-pattern dialogs; syntax colors are a native lexical
+implementation. The legacy source remains available for reference and does not
+become the default frontend.
 
-Arch:
+## Validation and installation
 
-    pacman -S gcc make pkgconf openmotif
+```sh
+uv run --no-project --with python-xlib --with pillow python tests/test-wayland.py
+XNEDIT_TEST_BINARY="$PWD/build-x11/xnedit" \
+  uv run --no-project --with dbus-next --with python-xlib --with pillow python tests/test-ui.py
+```
 
-FreeBSD:
+The first test uses a private real DomeD compositor and verifies mandatory
+Wayland, menu association and actual keyboard editing/saving. The opt-in X11
+suite verifies menu-host transitions, split editing, search/regex replacement,
+undo/redo, independent tabs and read-only files. Artifacts stay under build-fltk.
 
-    pkg install pkgconf open-motif libiconv
+`cmake --install build-fltk --prefix /usr/local` installs the binary, desktop entry
+and documentation. `scripts/install-system.py --prepare DIRECTORY --remove-kate` stages the
+release and a reviewed install plan, including DomeD-specific MIME defaults.
+Run the prepared `install.py` with sudo only after reviewing that plan. Existing
+files are backed up. Kate removal is restricted to the installed `kate`,
+`kate-plugins` and `kate-krunner-plugin` packages, checked with RPM before removal;
+it does not autoremove KDE libraries or delete personal Kate settings. No desktop
+or display-manager session is restarted.
 
-Solaris/OpenIndiana:
-
-    pkg install gcc make pkgconf motif
-
-Cygwin:
-
-    setup-x86_64.exe -qP gcc-g++,make,git,pkg-config,libX11-devel,libXt-devel,libXm-devel,libXrender-devel,libXft-devel,libiconv-devel,libfontconfig-devel,motif,bison
-
-To build XNEdit from source, run make from XNEdit's root directory and specify
-the build-configuration:
-
-    make <build-config>
-
-Available configurations are:
-    
- - linux
- - solaris
- - freebsd
- - netbsd
- - openbsd
- - macos
- - cygwin
- - generic
-
-If everything works properly, this will produce two executables called
-'xnedit' and 'xnc' in the directory called 'source'.
-
-INSTALLATION
-------------
-
-To install the XNEdit binaries and desktop integration files, run as root:
-
-    make install
-
-This will install the binaries to /usr/bin and desktop integration files to
-`/usr/share`. The desktop integration consists of a starter file `xnedit.desktop`
-and the icon `xnedit.png`.
-
-To install to another destination, specify a path prefix with
-
-    make install PREFIX=/path  
-
-To install just the binaries, copy the files `xnedit` and `xnc` from the
-`source` directory to your path.
-
-RUNNING XNEDIT
---------------
-
-To run XNEdit, simply type `xnedit`, optionally followed by the name of a file
-or files to edit. On-line help is available from the pulldown menu on the far
-right of the menu bar. For more information on the syntax of the xnedit command
-line, look under the heading of "XNEdit Command Line".
-
-The recommended way to use XNEdit, though, is in client/server mode, invoked by
-the xnc executable. It allows you to edit multiple files within the same
-instance of XNEdit (but still in multiple windows). This saves memory (only one
-process keeps running), and enables additional functionality (such as find &
-replace across multiple windows). See "Server Mode and xnc" in the help menu
-for more information.
-
-COMPATIBILITY WITH PREVIOUS VERSIONS
-------------------------------------
-
-### Upgrading from NEdit 5.7 to XNEdit 
-
-XNEdit uses the same preferences format as NEdit 5.7. Also the X-Resources have
-the same appname `nedit`. Therefore NEdit's settings are compatible with
-XNEdit, except the font configuration.
-
-XNEdit's default configuration directory is `~/.xnedit`. To use your
-existing NEdit settings in XNEdit, copy the content from `~/.nedit/` to
-`~/.xnedit` or just rename the `~/.nedit` directory.
-
-After that, you need to adjust the font settings. To use the default XNEdit
-font settings, delete the following lines from the nedit.rc file:
-
-    nedit.textFont: ...
-    nedit.boldHighlightFont: ...
-    nedit.italicHighlightFont: ...
-    nedit.boldItalicHighlightFont: ...
-
-Or alternatively, adjust the fonts directly in XNEdit.
-
-DOCUMENTATION
--------------
-
-More information is available from XNEdit's on-line help system, the man-pages
-and from the [web page](https://www.unixwork.de/xnedit/) for XNEdit.
-
-SUPPORT
--------
-
-Bug reports and feature requests can be issued at github, sourcehut,
-sourceforge or contact me via email.
-
- - https://github.com/unixwork/xnedit/
- - https://sr.ht/~unixwork/xnedit/
- - https://sourceforge.net/projects/xnedit/
- - Olaf Wintermann <olaf.wintermann@gmail.com>
-
-AUTHORS
--------
-
-XNEdit is based on NEdit 5.7 and developed by Olaf Wintermann. 
-
-NEdit developers: Tony Balinski, Arne Førlie, Nathaniel Gray, Eddy De Greef,
-Thorsten Haude, Andrew Hood, Scott Tringali, TK Soh, Mark Edel,
-Joy Kyriakopulos, Christopher Conrad, Jim Clark, Arnulfo Zepeda-Navratil,
-Suresh Ravoor, Max Vohlken, Yunliang Yu, Donna Reid, Steve Haehn,
-Steve LoBasso and Alexander Mai.
-
-Additional NEdit patches by: Fredrik Jönsson, Per Grahn, Peter Kovář.
-
-XNEdit contributions: Laszlo Ersek, Mike Becker, Peter Mühlenpfordt,
-Valerio Messina, Jack Zeal, Chris Wareham and Alexander Hajnal.
-
-The regular expression matching routines used in NEdit are adapted (with
-permission) from original code written by Henry Spencer at the University of
-Toronto.
-
-The Microline widgets are inherited from the Mozilla project.
-
-Syntax highlighting patterns and smart indent macros were contributed by
-Simon T. MacDonald,  Maurice Leysens, Matt Majka, Alfred Smeenk, Alain Fargues,
-Christopher Conrad, Scott Markinson, Konrad Bernloehr, Ivan Herman,
-Patrice Venant, Christian Denat, Philippe Couton, Max Vohlken,
-Markus Schwarzenberg, Himanshu Gohel, Steven C. Kapp, Michael Turomsha,
-John Fieber, Chris Ross, Nathaniel Gray, Joachim Lous, Mike Duigou,
-Seak Teng-Fong, Joor Loohuis, Mark Jones and Niek van den Berg. 
-
-LICENSE
--------
-
-XNEdit may be freely distributed under the terms of the GNU
-General Public License
-
-See the LICENSE file for more informations.
-
+GPL-2.0-or-later, retaining upstream notices and exceptions. Shared de-xr UI hooks
+are MIT; see NOTICE-FLTK.md and UPSTREAM.json.

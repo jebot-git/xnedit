@@ -1,0 +1,24 @@
+{
+  "repository": "https://github.com/unixwork/xnedit",
+  "revision": "0ffad9c2cec40c4a039b9a411fb75e547a78a371",
+  "retrieved": "2026-10-23",
+  "frontend": "FLTK",
+  "fork": "https://github.com/jebot-git/xnedit",
+  "shared_ui": {
+    "repositories": [
+      "https://github.com/jebot-git/DomeD",
+      "https://github.com/jebot-git/qimgvr"
+    ],
+    "license": "MIT",
+    "DomeD_revision": "cf1e772",
+    "qimgvr_revision": "d8d3ae2e"
+  },
+  "scope": {
+    "wayland_default": true,
+    "x11_build_option": "XNEDIT_ENABLE_X11 (default OFF)",
+    "excluded": [
+      "remote xnc",
+      "NEdit macro interpreter"
+    ]
+  }
+}

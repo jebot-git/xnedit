@@ -36,3 +36,10 @@ resources/macos/build
 resources/macos/install
 gmon.out
 .idea
+
+/build-fltk/
+
+/build-x11/
+/build-asan/
+
+__pycache__/

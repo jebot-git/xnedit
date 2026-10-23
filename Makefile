@@ -1,3 +1,11 @@
+.DEFAULT_GOAL := fltk
+.PHONY: fltk legacy
+fltk:
+	cmake -S . -B build-fltk -DCMAKE_BUILD_TYPE=Release -DFLTK_DIR=/opt/fltk-vr/toolkit/share/fltk
+	cmake --build build-fltk --parallel 4
+# Explicit legacy targets (linux, freebsd, etc.) retain the upstream Motif build.
+legacy: linux
+
 SHELL=/bin/sh
 PREFIX=/usr
 #
