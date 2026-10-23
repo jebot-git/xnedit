@@ -35,6 +35,9 @@ with tempfile.TemporaryDirectory(prefix='xnedit-wayland-')as tmp:
   compositor=start([os.environ.get('DOME_COMPOSITOR','/usr/local/bin/dome-compositor'),'--backend','nested'],'compositor',env)
   log=wait(lambda:(out/'compositor.log').read_text()if'Dome Wayland socket:'in(out/'compositor.log').read_text()else None)
   env['WAYLAND_DISPLAY']=re.search(r'Dome Wayland socket: (\S+)',log)[1]
+  viewport=subprocess.run([str(root/'build-fltk/editor-viewport-test')],env=env,capture_output=True,text=True,timeout=20)
+  (out/'viewport.log').write_text(viewport.stdout+viewport.stderr)
+  check(viewport.returncode==0,'newline, indentation and first-character visibility regressions pass on native Wayland')
   app=start([str(root/'build-fltk/xnedit'),str(file)],'editor',{**env,'WAYLAND_DEBUG':'client'})
   def state():return json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/api/state'))['scene']
   def window():return next((w for w in state()['windows']if w['app_id']=='org.domed.XNEdit'),None)

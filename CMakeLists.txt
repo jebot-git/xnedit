@@ -35,4 +35,15 @@ if(BUILD_TESTING)
  target_link_libraries(document-test PRIVATE xnedit-document)
  target_compile_options(document-test PRIVATE -UNDEBUG)
  add_test(NAME editor-document COMMAND document-test)
+ # Run by test-wayland.py inside its private compositor, not on the user display.
+ add_executable(editor-viewport-test tests/editor-viewport.cpp fltk/desktop-menu.cpp
+   "${CMAKE_CURRENT_BINARY_DIR}/appmenu-protocol.c" "${CMAKE_CURRENT_BINARY_DIR}/appmenu-client.h")
+ target_compile_options(editor-viewport-test PRIVATE -UNDEBUG)
+ target_compile_definitions(editor-viewport-test PRIVATE XNEDIT_ENABLE_X11=$<BOOL:${XNEDIT_ENABLE_X11}>)
+ target_include_directories(editor-viewport-test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+ target_link_libraries(editor-viewport-test PRIVATE xnedit-document fltk::fltk-shared
+   fltk::images-shared fltk::gl-shared OpenGL::GL PkgConfig::GIO PkgConfig::FONTCONFIG PkgConfig::DESKTOPMENU)
+ if(XNEDIT_ENABLE_X11)
+   target_link_libraries(editor-viewport-test PRIVATE PkgConfig::DESKTOPMENU_X11)
+ endif()
 endif()

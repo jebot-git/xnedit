@@ -31,6 +31,9 @@ application's X11 association code and dependencies are compiled only when opted
 
 - Multiple independent document tabs, split views, line numbers, wrapping, syntax
   colors, bracket matching, indentation, duplicate/delete line, and read-only mode.
+- Enter and keypad Enter reveal each new line from the left edge, including after
+  horizontal scrolling. Auto-indent preserves the preceding indentation; disable
+  Document → Auto indent to start new lines at column zero.
 - XNEdit-buffer-backed undo/redo. Literal search supports Unicode case-insensitive
   matching; regex search, lookaround and captured replacement use the upstream engine.
 - UTF-8, UTF-16LE/BE and explicitly selected legacy encodings; BOM and LF/CRLF/CR

@@ -1079,6 +1079,7 @@ int Editor::handle(int event) {
     }
     if (page->doc.readOnly) {
       if (key == FL_BackSpace || key == FL_Delete || key == FL_Enter ||
+          key == FL_KP_Enter ||
           key == FL_Tab || ((mods & FL_CTRL) && (key == 'v' || key == 'x')) ||
           (!(mods & (FL_CTRL | FL_ALT | FL_META)) && Fl::event_length() > 0))
         return 1;
@@ -1099,23 +1100,30 @@ int Editor::handle(int event) {
         std::string spaces(page->doc.indentWidth - col % page->doc.indentWidth,
                            ' ');
         insert(spaces.c_str());
+        show_insert_position();
         return 1;
       }
     }
-    if (!page->doc.readOnly && key == FL_Enter && mods == 0 &&
-        page->autoIndent) {
-      int pos = insert_position(), start = buffer()->line_start(pos);
+    if (!page->doc.readOnly && (key == FL_Enter || key == FL_KP_Enter) &&
+        mods == 0 && page->autoIndent) {
+      int a = 0, b = 0;
+      const bool selected = buffer()->selection_position(&a, &b);
+      const int pos = selected ? a : insert_position();
+      const int start = buffer()->line_start(pos);
       char *line = buffer()->text_range(start, pos);
       std::string padding;
       for (char *p = line; *p == ' ' || *p == '\t'; p++)
         padding += *p;
       free(line);
-      int a, b;
-      if (buffer()->selection_position(&a, &b)) {
+      if (selected) {
         buffer()->remove_selection();
         insert_position(a);
       }
       insert(("\n" + padding).c_str());
+      // A new logical line starts at the left edge. Revealing only its caret
+      // can leave the indentation/first glyph hidden behind the old offset.
+      scroll(scroll_row(), 0);
+      show_insert_position();
       return 1;
     }
   }
