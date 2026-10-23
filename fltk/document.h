@@ -44,6 +44,7 @@ public:
   Document(const Document &) = delete;
   std::string text() const;
   int length() const { return model->length; }
+  uint64_t generation() const { return revision; }
   bool modified() const {
     if (checkedRevision != revision) {
       textDirty = length() != int(saved.size()) || text() != saved;

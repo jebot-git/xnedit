@@ -68,6 +68,52 @@ xnedit --version
 xnedit --build-options
 ```
 
+## Syntax highlighting
+
+Language detection uses the filename, extension and interpreter shebang, including
+extensionless scripts. Choose **Document → Language** to override it for the current
+tab, or choose **Plain text**. **Automatic** follows Save As filename changes. The
+status bar shows the detected/selected language. **View → Syntax highlighting**
+turns colouring off without changing the document.
+
+Modes cover C/C++, Rust, Python, JavaScript/TypeScript, Go, Java, C#, shell, Lua,
+SQL, JSON, YAML, TOML, INI/systemd/desktop files, HTML, XML, CSS, Markdown,
+Makefiles, CMake and unified diffs. Unknown files use plain text. Highlighting
+separates comments, strings, keywords, numbers, types, functions, operators,
+directives, keys/tags, headings, variables and diff additions/deletions. It handles
+multiline/triple/raw strings, nested Rust comments and lifetimes, Lua/CMake long
+brackets, shell heredocs, YAML block scalars, JavaScript regex literals, HTML
+script/style content and fenced Markdown code. It remains lexical highlighting,
+not a language-server or semantic parser.
+
+The palette follows DomeD light/dark appearance and retains the selected bitmap
+font. Both split panes share the same UTF-8 byte-aligned style buffer. Only the
+changed style range is replaced; files larger than 4 MiB remain editable with
+plain styling to bound interactive highlighting work.
+
+## Find, replace and regular expressions
+
+**Ctrl+F** opens Find, **Ctrl+H** opens Replace, **F3** finds the next match and
+**Shift+F3** finds the previous one. The search panel supports literal/regex mode,
+case sensitivity, replacement of the selected match and **Replace all**. Searches
+wrap with status feedback; regex errors stay in the search status. Repeated
+zero-width matches advance at UTF-8 character boundaries. Replace all is one
+undoable edit, and read-only documents cannot be replaced.
+
+Open **Search → Regex helper...** or click **Regex help** in the search panel.
+The native FLTK helper contains 19 examples, an editable sample, live validation
+and first-match/replacement preview. **Insert pattern** adds a token at the pattern
+cursor; **Load example** loads its pattern, sample and replacement. **Use in
+find/replace** transfers the fields into the editor's search panel with regex
+mode enabled. No document is modified by the helper.
+
+The helper uses XNEdit's actual expression engine: `<word>` matches a whole word,
+`\d` matches digits, `\s` matches horizontal whitespace and `\n` matches a line
+break. In replacements, `&` inserts the whole match, `\1` through `\9` insert
+capture groups, and `\U\1` / `\L\1` change a captured group's case. `$1` is literal
+text. Lookaround and non-capturing groups are available; lookbehind must have
+bounded length. Each example is checked against the same engine used for editing.
+
 ## Scope
 
 Remote `xnc` and the NEdit macro language/interpreter are outside this fork's
@@ -84,8 +130,11 @@ XNEDIT_TEST_BINARY="$PWD/build-x11/xnedit" \
   uv run --no-project --with dbus-next --with python-xlib --with pillow python tests/test-ui.py
 ```
 
-The first test uses a private real DomeD compositor and verifies mandatory
-Wayland, menu association and actual keyboard editing/saving. The opt-in X11
+CTest covers the document model, language lexers and search/replacement semantics.
+The first UI test uses a private real DomeD compositor and verifies mandatory
+Wayland, menu association and actual keyboard editing/saving. Its native editor
+fixture also checks split-pane highlighting, language changes, the regex helper,
+replacement callbacks and viewport behavior, with light/dark GPU captures. The opt-in X11
 suite verifies menu-host transitions, split editing, search/regex replacement,
 undo/redo, independent tabs and read-only files. Artifacts stay under build-fltk.
 

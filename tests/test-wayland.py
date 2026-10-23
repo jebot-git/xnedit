@@ -35,9 +35,11 @@ with tempfile.TemporaryDirectory(prefix='xnedit-wayland-')as tmp:
   compositor=start([os.environ.get('DOME_COMPOSITOR','/usr/local/bin/dome-compositor'),'--backend','nested'],'compositor',env)
   log=wait(lambda:(out/'compositor.log').read_text()if'Dome Wayland socket:'in(out/'compositor.log').read_text()else None)
   env['WAYLAND_DISPLAY']=re.search(r'Dome Wayland socket: (\S+)',log)[1]
-  viewport=subprocess.run([str(root/'build-fltk/editor-viewport-test')],env=env,capture_output=True,text=True,timeout=20)
+  viewport=subprocess.run([str(root/'build-fltk/editor-viewport-test')],env={**env,'XNEDIT_UI_CAPTURE_DIR':str(out)},capture_output=True,text=True,timeout=30)
   (out/'viewport.log').write_text(viewport.stdout+viewport.stderr)
-  check(viewport.returncode==0,'newline, indentation and first-character visibility regressions pass on native Wayland')
+  check(viewport.returncode==0,'editor viewport, language modes, regex helper and find/replace regressions pass on native Wayland')
+  for capture in out.glob('*.ppm'):
+   Image.open(capture).save(capture.with_suffix('.png'))
   app=start([str(root/'build-fltk/xnedit'),str(file)],'editor',{**env,'WAYLAND_DEBUG':'client'})
   def state():return json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/api/state'))['scene']
   def window():return next((w for w in state()['windows']if w['app_id']=='org.domed.XNEdit'),None)

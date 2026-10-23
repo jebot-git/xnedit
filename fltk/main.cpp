@@ -4,6 +4,8 @@
 #include "appearance.h"
 #include "desktop-menu.h"
 #include "document.h"
+#include "highlight.h"
+#include "regex-helper.h"
 #include "gpu-window.h"
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
@@ -36,8 +38,11 @@ struct Page : Fl_Group {
   Editor *active = nullptr;
   bool syncing = false, split = false, wrap = false, syntax = true,
        autoIndent = true;
+  SearchCursor searchCursor;
   std::vector<Fl_Text_Display::Style_Table_Entry> styles;
   uint64_t revision = 0, styled = ~uint64_t(0);
+  highlight::Language language = highlight::Language::Automatic, detectedLanguage = highlight::Language::Plain;
+  fs::path highlightedPath;
   fs::path recovery;
   std::string recoveryFingerprint;
   Page(Window *, int, int, int, int);
@@ -82,7 +87,10 @@ class Window : public dx::GpuWindow {
   Fl_Button previous{680, 0, 85, 30, "Previous"}, next{775, 0, 80, 30, "Next"},
       one{480, 35, 100, 30, "Replace"}, all{590, 35, 115, 30, "Replace all"},
       closeSearch{1010, 0, 80, 30, "Close"};
+  Fl_Button regexHelp{820,0,88,30,"Regex help"};
   Fl_Box status{8, 755, 1084, 25};
+  std::unique_ptr<RegexHelper> regexHelper;
+  std::string searchFeedback;
   std::unique_ptr<DesktopMenu> desktop;
   std::vector<Page *> pages;
   std::vector<std::string> recent;
@@ -125,6 +133,8 @@ public:
     search.add(one);
     search.add(all);
     search.add(closeSearch);
+    search.add(regexHelp);
+    regexHelp.callback([](Fl_Widget *,void *p){static_cast<Window *>(p)->command("Regex helper...");},this);
     for (auto item : std::vector<std::pair<const char *, int>>{
              {"File/New", FL_CTRL + 'n'},
              {"File/Open...", FL_CTRL + 'o'},
@@ -148,6 +158,7 @@ public:
              {"Edit/Delete line", FL_CTRL + FL_SHIFT + 'k'},
              {"Search/Find...", FL_CTRL + 'f'},
              {"Search/Replace...", FL_CTRL + 'h'},
+             {"Search/Regex helper...", 0},
              {"Search/Find next", FL_F + 3},
              {"Search/Find previous", FL_SHIFT + (FL_F + 3)},
              {"Search/Find selection", FL_CTRL + (FL_F + 3)},
@@ -174,6 +185,9 @@ public:
              {"Help/About XNEdit XR", 0},
              {"Help/Port status", 0}})
       menu.add(item.first, item.second, callback, this);
+    for (auto &mode : highlight::modes())
+      menu.add((std::string("Document/Language/") + mode.name).c_str(), 0,
+               callback, this, FL_MENU_RADIO | (mode.language == highlight::Language::Automatic ? FL_MENU_VALUE : 0));
     toolbar.begin();
     for (auto item :
          std::vector<std::pair<const char *, int>>{{"New", 8},
@@ -248,7 +262,7 @@ public:
     const int row = std::max(30, dx::size + 14), bar = row + 10;
     const int statusHeight = std::max(32, dx::size + 16);
     const int left = std::max(85, int(fl_width("Replace:")) + 16);
-    const int cell = std::max(76, int(fl_width("Next")) + 20);
+    const int cell = std::max(76, int(fl_width("Replace all")) + 20);
     const int top = menu.universal() ? 0 : row;
     menu.resize(0, 0, w, top);
     toolbar.resize(0, top, w, bar);
@@ -261,7 +275,8 @@ public:
     }
     int sy = top + bar, searchHeight = 2 * row + 16;
     search.resize(0, sy, w, searchHeight);
-    needle.resize(left, sy + 3, std::max(100, w - left - 210), row);
+    needle.resize(left, sy + 3, std::max(100, w - left - 310), row);
+    regexHelp.resize(w - 300, sy + 3, 88, row);
     regex.resize(w - 200, sy + 3, 75, row);
     sensitive.resize(w - 120, sy + 3, 75, row);
     closeSearch.resize(w - 40, sy + 3, 32, row);
@@ -270,10 +285,10 @@ public:
     replacement.resize(left, sy + row + 8,
                        std::max(100, w - left - 4 * cell - 12), row);
     one.resize(w - 4 * cell, sy + row + 8, cell - 4, row);
-    one.label("One");
+    one.label("Replace");
     one.tooltip("Replace selected match");
     all.resize(w - 3 * cell, sy + row + 8, cell - 4, row);
-    all.label("All");
+    all.label("Replace all");
     all.tooltip("Replace all matches");
     previous.resize(w - 2 * cell, sy + row + 8, cell - 4, row);
     previous.label("Prev");
@@ -448,6 +463,7 @@ public:
       if (!allowClose(p))
         return;
     closing = true;
+    if (regexHelper) regexHelper->hide();
     hide();
   }
   void updateTitle() {
@@ -473,6 +489,23 @@ public:
     } else if (current())
       current()->editor()->take_focus();
   }
+  void showRegexHelper() {
+    if (!regexHelper) {
+      regexHelper = std::make_unique<RegexHelper>();
+      regexHelper->use = [this](const std::string &pattern,const std::string &replace,bool matchCase) {
+        showSearch(true); needle.value(pattern.c_str()); replacement.value(replace.c_str());
+        regex.value(1); sensitive.value(matchCase);searchFeedback.clear();needle.take_focus();
+      };
+    }
+    auto p = current();
+    std::string sample;
+    if (p) {
+      if (p->text.selected()) { auto text=p->text.selection_text();sample=text;free(text); }
+      else { sample=p->doc.text(); }
+    }
+    regexHelper->values(needle.value(),replacement.value(),sample,sensitive.value());
+    regexHelper->show();
+  }
   void find(bool reverse) {
     auto p = current();
     if (!p)
@@ -486,21 +519,17 @@ public:
       int pos = p->editor()->insert_position();
       if (p->text.selection_position(&a, &b))
         pos = reverse ? a : b;
-      auto match = p->doc.find(needle.value(), pos, regex.value(),
-                               sensitive.value(), reverse);
-      if (!match)
-        match = p->doc.find(needle.value(), reverse ? p->doc.length() : 0,
-                            regex.value(), sensitive.value(), reverse);
-      if (!match) {
-        status.copy_label("No match");
-        return;
-      }
-      p->text.select(match->start, match->end);
-      p->editor()->insert_position(reverse ? match->start : match->end);
+      auto result = p->searchCursor.next(p->doc,needle.value(),pos,regex.value(),sensitive.value(),reverse);
+      if (!result) { searchFeedback="No match";return; }
+      auto &match=result->match;
+      searchFeedback = result->wrapped ? (reverse ? "Wrapped to end" : "Wrapped to beginning")
+          : match.start == match.end ? "Zero-width match" : "Match found";
+      p->text.select(match.start, match.end);
+      p->editor()->insert_position(reverse ? match.start : match.end);
       p->editor()->show_insert_position();
       p->editor()->take_focus();
     } catch (const std::exception &e) {
-      report(e.what());
+      searchFeedback = std::string("Search: ") + e.what();
     }
   }
   void replace(bool every) {
@@ -508,26 +537,33 @@ public:
     if (!p || p->doc.readOnly)
       return;
     try {
+      if (!*needle.value()) { showSearch(true);searchFeedback="Enter search text";return; }
       if (every) {
         int n = p->doc.replaceAll(needle.value(), replacement.value(),
                                   regex.value(), sensitive.value());
-        p->refresh();
-        status.copy_label((std::to_string(n) + " replacements").c_str());
+        p->refresh(p->editor()->insert_position());
+        searchFeedback=std::to_string(n) + " replacements";
       } else {
-        int a, b;
-        if (p->text.selection_position(&a, &b)) {
+        int a=p->editor()->insert_position(), b=a;
+        if (p->text.selection_position(&a, &b) ||
+            p->searchCursor.current(p->doc,needle.value(),a,regex.value(),sensitive.value())) {
           auto match =
               p->doc.find(needle.value(), a, regex.value(), sensitive.value(),
                           false, replacement.value());
           if (match && match->start == a && match->end == b) {
             p->doc.replace(a, b, match->replacement);
-            p->refresh(a + match->replacement.size());
+            int cursor=a+match->replacement.size();
+            if (a==b && cursor<p->doc.length()) {
+              auto text=p->doc.text(); ++cursor;
+              while(cursor<p->doc.length() && (static_cast<unsigned char>(text[cursor])&0xc0)==0x80)++cursor;
+            }
+            p->refresh(cursor);
           }
         }
         find(false);
       }
     } catch (const std::exception &e) {
-      report(e.what());
+      searchFeedback = std::string("Search: ") + e.what();
     }
   }
   void gotoLine(Page *p, int line) {
@@ -541,8 +577,16 @@ public:
     auto p = current();
     auto editor = p ? p->editor() : nullptr;
     try {
+      if (p) for (auto &mode : highlight::modes()) if (name == mode.name) {
+        p->language = mode.language;
+        p->styled = ~uint64_t(0);
+        p->highlight();
+        return;
+      }
       if (name == "New")
         newDocument();
+      else if (name == "Regex helper...")
+        showRegexHelper();
       else if (name == "Open...")
         chooser();
       else if (name == "Open with Encoding...")
@@ -758,8 +802,15 @@ public:
       resize(x(), y(), w(), h());
     }
     for (auto page : pages)
-      if (page->revision != page->styled)
+      if (page->revision != page->styled || page->highlightedPath != page->doc.path)
         page->highlight();
+    for (auto &mode : highlight::modes()) {
+      auto item = const_cast<Fl_Menu_Item *>(menu.find_item((std::string("Document/Language/") + mode.name).c_str()));
+      if (item && bool(item->value()) != (mode.language == p->language)) {
+        if (mode.language == p->language) item->set(); else item->clear();
+        menu.redraw();
+      }
+    }
     auto e = p->editor();
     int cursor = e->insert_position();
     int line = p->text.count_lines(0, cursor) + 1;
@@ -770,9 +821,11 @@ public:
         (p->doc.readOnly ? "Read only · " : "") + std::to_string(line) + ":" +
         std::to_string(col) + " · " + p->doc.encoding +
         (p->doc.bom ? " BOM" : "") + " · " + p->doc.eol + " · " +
+        highlight::name(p->detectedLanguage) + " · " +
         (p->doc.diskChanged() && !p->doc.path.empty() ? "Changed on disk · "
                                                       : "") +
         (p->doc.path.empty() ? "Untitled" : p->doc.path.string());
+    if (searchOpen && !searchFeedback.empty()) info += " · " + searchFeedback;
     status.copy_label(info.c_str());
     dx::enable_menu(menu, "Edit/Undo", p->doc.canUndo() && !p->doc.readOnly);
     dx::enable_menu(menu, "Edit/Redo", p->doc.canRedo() && !p->doc.readOnly);
@@ -961,6 +1014,24 @@ void Page::applyFont() {
       {fl_rgb_color(light ? 25 : 120, light ? 65 : 175, light ? 170 : 245),
        dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
       {fl_rgb_color(light ? 140 : 210, light ? 35 : 150, light ? 120 : 220),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 0 : 105, light ? 105 : 210, light ? 120 : 220),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 115 : 230, light ? 75 : 205, light ? 0 : 110),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 85 : 190, light ? 80 : 190, light ? 105 : 215),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 145 : 240, light ? 60 : 165, light ? 25 : 115),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 0 : 100, light ? 100 : 200, light ? 145 : 245),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 105 : 210, light ? 40 : 165, light ? 155 : 250),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 145 : 235, light ? 75 : 195, light ? 0 : 110),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 20 : 130, light ? 110 : 220, light ? 45 : 150),
+       dx::font, dx::size, 0, FL_BACKGROUND2_COLOR},
+      {fl_rgb_color(light ? 170 : 255, light ? 40 : 135, light ? 45 : 145),
        dx::font, dx::size, 0, FL_BACKGROUND2_COLOR}};
   for (auto e : {first, second})
     e->highlight_data(&style, styles.data(), styles.size(), 'A', nullptr,
@@ -969,67 +1040,28 @@ void Page::applyFont() {
   highlight();
 }
 void Page::highlight() {
-  auto s = doc.text();
-  std::string colors(s.size(), 'A');
-  auto ext = doc.path.extension().string();
-  bool python = ext == ".py" || ext == ".sh" || ext == ".toml" ||
-                ext == ".yaml" || ext == ".yml";
-  static const std::unordered_set<std::string> words = {
-      "if",        "else",      "elif",     "for",     "while",  "return",
-      "break",     "continue",  "class",    "struct",  "public", "private",
-      "protected", "static",    "const",    "void",    "int",    "bool",
-      "char",      "float",     "double",   "auto",    "def",    "import",
-      "from",      "as",        "try",      "catch",   "except", "finally",
-      "throw",     "true",      "false",    "True",    "False",  "None",
-      "null",      "namespace", "using",    "include", "switch", "case",
-      "default",   "match",     "fn",       "let",     "mut",    "pub",
-      "impl",      "use",       "in",       "not",     "and",    "or",
-      "async",     "await",     "function", "var",     "local",  "end",
-      "then",      "do"};
-  if (syntax && s.size() < 4 * 1024 * 1024)
-    for (size_t i = 0; i < s.size();) {
-      size_t start = i;
-      char c = s[i];
-      if ((python && c == '#') ||
-          (!python && c == '/' && i + 1 < s.size() && s[i + 1] == '/')) {
-        while (i < s.size() && s[i] != '\n')
-          i++;
-        std::fill(colors.begin() + start, colors.begin() + i, 'B');
-      } else if (!python && c == '/' && i + 1 < s.size() && s[i + 1] == '*') {
-        i += 2;
-        while (i + 1 < s.size() && (s[i] != '*' || s[i + 1] != '/'))
-          i++;
-        i = std::min(s.size(), i + 2);
-        std::fill(colors.begin() + start, colors.begin() + i, 'B');
-      } else if (c == '"' || c == '\'') {
-        i++;
-        while (i < s.size()) {
-          if (s[i] == '\\' && i + 1 < s.size()) {
-            i += 2;
-            continue;
-          }
-          if (s[i++] == c)
-            break;
-        }
-        std::fill(colors.begin() + start, colors.begin() + i, 'C');
-      } else if (g_ascii_isdigit(c)) {
-        while (i < s.size() &&
-               (g_ascii_isalnum(s[i]) || s[i] == '.' || s[i] == '_'))
-          i++;
-        std::fill(colors.begin() + start, colors.begin() + i, 'E');
-      } else if (g_ascii_isalpha(c) || c == '_') {
-        while (i < s.size() && (g_ascii_isalnum(s[i]) || s[i] == '_'))
-          i++;
-        if (words.count(s.substr(start, i - start)))
-          std::fill(colors.begin() + start, colors.begin() + i, 'D');
-      } else
-        i++;
-    }
-  style.text(colors.c_str());
+  const auto source = doc.text();
+  detectedLanguage = language == highlight::Language::Automatic
+      ? highlight::detect(doc.path, source) : language;
+  auto colors = highlight::colorize(source, syntax ? detectedLanguage : highlight::Language::Plain);
+  char *previous = style.text();
+  const size_t oldSize = style.length();
+  size_t firstChanged = 0, oldEnd = oldSize, newEnd = colors.size();
+  while (firstChanged < oldSize && firstChanged < newEnd && previous[firstChanged] == colors[firstChanged]) ++firstChanged;
+  while (oldEnd > firstChanged && newEnd > firstChanged && previous[oldEnd-1] == colors[newEnd-1]) { --oldEnd; --newEnd; }
+  free(previous);
+  if (oldEnd != firstChanged || newEnd != firstChanged) {
+    const auto changed = colors.substr(firstChanged, newEnd-firstChanged);
+    style.replace(firstChanged, oldEnd, changed.c_str());
+    // Byte positions shift after insert/delete even when their styles agree.
+    const int end = oldSize == colors.size() ? int(newEnd) : text.length();
+    first->redisplay_range(firstChanged, end);
+    second->redisplay_range(firstChanged, end);
+  }
+  highlightedPath = doc.path;
   styled = revision;
-  first->redisplay_range(0, text.length());
-  second->redisplay_range(0, text.length());
 }
+
 int Editor::handle(int event) {
   if (!page)
     return Fl_Text_Editor::handle(event);

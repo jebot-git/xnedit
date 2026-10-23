@@ -303,7 +303,8 @@ std::optional<Match> Document::find(const std::string &pattern, int start,
   if (pattern.empty())
     return {};
   auto s = text();
-  start = std::clamp(start, 0, int(s.size()));
+  start = std::clamp(start, 0, int(s.size()) + (reverse ? 1 : 0));
+  if (reverse && start == 0) return {};
   if (regex) {
     char *error = nullptr;
     auto re = CompileRE(pattern.c_str(), &error,
@@ -311,18 +312,26 @@ std::optional<Match> Document::find(const std::string &pattern, int start,
     if (!re)
       throw std::runtime_error(error ? error : "Invalid regular expression");
     const char *begin = s.c_str(), *end = begin + s.size();
+    // A null forward candidate boundary allows zero-width matches at EOF.
+    // Backward searches exclude the current insertion point, just as literal
+    // searches do, while retaining the real beginning-of-line context.
     int ok = ExecRE(re, reverse ? begin : begin + start,
-                    reverse ? begin + start : end, reverse,
-                    start ? s[start - 1] : '\n', '\n', nullptr, begin, end);
+                    reverse ? begin + start - 1 : nullptr, reverse,
+                    !reverse && start ? s[start - 1] : '\n', '\n',
+                    ".,/\\`'!|@#%^&*()-=+{}[]\":;<>?", begin, end);
     std::optional<Match> match;
     if (ok) {
-      std::vector<char> out(1024 * 1024);
-      if (!SubstituteRE(re, replacement.c_str(), out.data(), out.size())) {
-        NEditFree(re);
-        throw std::runtime_error("Replacement exceeds the supported size");
+      std::string expanded;
+      if (!replacement.empty()) {
+        std::vector<char> out(1024 * 1024);
+        if (!SubstituteRE(re, replacement.c_str(), out.data(), out.size())) {
+          NEditFree(re);
+          throw std::runtime_error("Replacement exceeds the supported size");
+        }
+        expanded = out.data();
       }
       match = Match{int(re->startp[0] - begin), int(re->endp[0] - begin),
-                    out.data()};
+                    std::move(expanded)};
     }
     NEditFree(re);
     return match;
