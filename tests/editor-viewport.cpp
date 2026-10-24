@@ -100,6 +100,30 @@ int main() {
   text("async def greet(name):\n    \"\"\"A multiline docstring.\n    Comments stay inside this string.\"\"\"\n    # Unicode names stay intact.\n    return print(\"Hello 日\", 42)\n");
   page->highlight();settle();capture(window,"highlight-dark");
   std::cout<<"PASS Language override, path changes, highlighting toggle and both split views\n";
+  for (auto mode : {highlight::Language::Gemini, highlight::Language::Gopher,
+                    highlight::Language::GopherPlus, highlight::Language::Nex,
+                    highlight::Language::Spartan, highlight::Language::Scroll}) {
+    text("=> /about About\n=: /submit Prompt\n# Heading\n");
+    auto unchanged=page->doc.text();
+    window.command(highlight::name(mode));
+    assert(page->detectedLanguage==mode && page->doc.text()==unchanged);
+    code=page->style.text();
+    assert(std::string(code)==highlight::colorize(unchanged,mode));free(code);
+  }
+  page->doc.path="fixture.gmi";window.command("Automatic");
+  assert(page->detectedLanguage==highlight::Language::Spartan);
+  text("# Gemini 日本語\n=> gemini://example/ Capsule\n* Item\n> Quote\n``` ASCII art\n=> literal\n```\n");
+  page->highlight();assert(page->detectedLanguage==highlight::Language::Gemini);
+  capture(window,"highlight-gemini");
+  page->doc.path="fixture.scroll";
+  text("# Scroll 日本語\n##### Small heading\n** １２. Ordered sub-list\n> _Quote_ with *strong* and `code`\n=> #3.2 Section [Citation]\n=: /search Search\n---\n\\=> Escaped link\n");
+  page->highlight();assert(page->detectedLanguage==highlight::Language::Scroll);
+  capture(window,"highlight-scroll");
+  window.command("Syntax highlighting");code=page->style.text();
+  assert(std::string(code).find_first_not_of(highlight::Normal)==std::string::npos);free(code);
+  window.command("Syntax highlighting");
+  page->doc.path="fixture.py";window.command("Automatic");
+  std::cout<<"PASS All six protocol modes, automatic Gemini/Spartan detection, Scroll, split styling and syntax toggle\n";
   // Drive the real helper controls, then apply them to the native search panel.
   window.command("Regex helper...");settle();
   RegexHelper *helper=nullptr;

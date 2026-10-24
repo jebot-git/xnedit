@@ -78,7 +78,8 @@ turns colouring off without changing the document.
 
 Modes cover C/C++, Rust, Python, JavaScript/TypeScript, Go, Java, C#, shell, Lua,
 SQL, JSON, YAML, TOML, INI/systemd/desktop files, HTML, XML, CSS, Markdown,
-Makefiles, CMake and unified diffs. Unknown files use plain text. Highlighting
+Makefiles, CMake, unified diffs, Gemini, Gopher, Gopher+, Nex, Spartan and Scroll.
+Unknown files use plain text. Highlighting
 separates comments, strings, keywords, numbers, types, functions, operators,
 directives, keys/tags, headings, variables and diff additions/deletions. It handles
 multiline/triple/raw strings, nested Rust comments and lifetimes, Lua/CMake long
@@ -90,6 +91,48 @@ The palette follows DomeD light/dark appearance and retains the selected bitmap
 font. Both split panes share the same UTF-8 byte-aligned style buffer. Only the
 changed style range is replaced; files larger than 4 MiB remain editable with
 plain styling to bound interactive highlighting work.
+
+### Small Internet documents
+
+Select each mode under **Document → Language**. Automatic detection uses:
+
+| Mode | Filenames and extensions |
+| --- | --- |
+| Gemini (Gemtext) | `.gmi`, `.gemini`, `.gemtext` |
+| Gopher (gophermap) | `gophermap`, `.gophermap`, `.gph`, `.gopher` |
+| Gopher+ | `gophermap+`, `gopherplus`, `.gopher+`, `.gopherplus`, `.gophermap+`; Gopher maps containing a `+INFO:` line |
+| Nex | `.nex`; extensionless `index` containing a `=> ` link line |
+| Spartan | `.spartan`; Gemtext files containing an unfenced `=:` prompt line |
+| Scroll (Scrolltext) | `.scroll`, `.scrolltext` |
+
+The extra suffixes are editor conveniences, not required protocol extensions.
+Detection probes at most the first 64 KiB for shared formats. A `.gmi` document
+without a prompt uses Gemini highlighting; Spartan's other line types are the
+same. Plain `.txt` documents remain plain; choose a language manually when their
+role cannot be inferred from the filename. Save As follows the new filename in
+Automatic mode.
+
+Gemtext highlights headings, links and their targets/labels, list markers,
+quotes and fenced literal text. Spartan also highlights input prompts. Nex
+highlights only its directory link syntax, preserving ordinary text and ASCII
+art. Gopher highlights tab-separated types, labels, selectors, hosts, ports and
+Gopher+ flags, plus Gophernicus comments and map directives. Gopher+ adds attribute
+blocks such as `+INFO:`, `+ADMIN:`, `+VIEWS:` and `+ASK:`, with form-field names.
+Scroll adds five heading levels, nested list/quote markers, ordered list markers,
+input links, link relations, thematic breaks, line escapes and Unicode-aware
+line-bounded strong/emphasis/code toggles. Fenced contents stay literal.
+All modes reuse DomeD's existing syntax palette and bitmap font.
+
+Format references: [Gemtext specification](https://geminiprotocol.net/docs/gemtext-specification.gmi),
+[Gopher RFC 1436](https://www.rfc-editor.org/rfc/rfc1436),
+[Gophernicus map syntax](https://github.com/gophernicus/gophernicus/blob/master/README.gophermap),
+[Gopher+ memo](https://github.com/gopher-protocol/gopher-plus/blob/master/gopherplus.txt),
+[Nex specification](https://nightfall.city/nex/info/specification.txt) and
+[authoring guide](https://nightfall.city/nex/info/station-guide.txt),
+[Spartan specification](https://github.com/michael-lazar/spartan/blob/main/public/specification.gmi),
+and the [archived Scroll speculative specification](https://github.com/michael-lazar/smolnet-portal/blob/master/docs/scroll_spec.txt)
+by Christian Lee Seibold (modification date 2024-08-03). Scroll's link relations
+remain marked tentative in that specification.
 
 ## Find, replace and regular expressions
 

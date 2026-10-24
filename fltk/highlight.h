@@ -7,7 +7,7 @@
 namespace highlight {
 enum class Language { Automatic, Plain, Cpp, Rust, Python, JavaScript, Go, Java,
   CSharp, Shell, Lua, Sql, Json, Yaml, Toml, Ini, Html, Xml, Css, Markdown, Make,
-  CMake, Diff };
+  CMake, Diff, Gemini, Gopher, GopherPlus, Nex, Spartan, Scroll };
 enum Style : char { Normal='A', Comment, String, Keyword, Number, Type, Function,
   Operator, Directive, Key, Heading, Variable, Addition, Deletion };
 struct Mode { Language language; const char *name; };

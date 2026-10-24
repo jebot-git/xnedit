@@ -2,6 +2,7 @@
 #include "highlight.h"
 #include <algorithm>
 #include <cctype>
+#include <glib.h>
 #include <unordered_map>
 #include <unordered_set>
 namespace highlight {
@@ -13,7 +14,10 @@ const std::vector<Mode> &modes() {
     {L::Go,"Go"},{L::Java,"Java"},{L::CSharp,"C#"},{L::Shell,"Shell"},{L::Lua,"Lua"},
     {L::Sql,"SQL"},{L::Json,"JSON"},{L::Yaml,"YAML"},{L::Toml,"TOML"},{L::Ini,"INI"},
     {L::Html,"HTML"},{L::Xml,"XML"},{L::Css,"CSS"},{L::Markdown,"Markdown"},
-    {L::Make,"Makefile"},{L::CMake,"CMake"},{L::Diff,"Diff"}};
+    {L::Make,"Makefile"},{L::CMake,"CMake"},{L::Diff,"Diff"},
+    {L::Gemini,"Gemini (Gemtext)"},{L::Gopher,"Gopher (gophermap)"},
+    {L::GopherPlus,"Gopher+"},{L::Nex,"Nex"},{L::Spartan,"Spartan"},
+    {L::Scroll,"Scroll (Scrolltext)"}};
   return values;
 }
 const char *name(L language) {
@@ -37,7 +41,11 @@ static L alias(std::string_view input) {
     {"desktop",L::Ini},{"service",L::Ini},{"socket",L::Ini},{"target",L::Ini},{"timer",L::Ini},{"mount",L::Ini},{"path",L::Ini},
     {"html",L::Html},{"htm",L::Html},{"xml",L::Xml},{"svg",L::Xml},{"xhtml",L::Xml},{"xsl",L::Xml},{"ui",L::Xml},
     {"css",L::Css},{"md",L::Markdown},{"markdown",L::Markdown},{"mk",L::Make},{"make",L::Make},{"makefile",L::Make},
-    {"cmake",L::CMake},{"diff",L::Diff},{"patch",L::Diff}};
+    {"cmake",L::CMake},{"diff",L::Diff},{"patch",L::Diff},
+    {"gmi",L::Gemini},{"gemini",L::Gemini},{"gemtext",L::Gemini},
+    {"gophermap",L::Gopher},{"gph",L::Gopher},{"gopher",L::Gopher},
+    {"gopher+",L::GopherPlus},{"gopherplus",L::GopherPlus},{"gophermap+",L::GopherPlus},
+    {"nex",L::Nex},{"spartan",L::Spartan},{"scroll",L::Scroll},{"scrolltext",L::Scroll}};
   auto found = values.find(lower(input));
   return found == values.end() ? L::Plain : found->second;
 }
@@ -49,6 +57,23 @@ L detect(const std::filesystem::path &path, std::string_view text) {
   if (file == ".editorconfig" || file == ".gitconfig") return L::Ini;
   auto extension = path.extension().string();
   L language = alias(extension.empty() ? "" : std::string_view(extension).substr(1));
+  if (file == "gophermap") language = L::Gopher;
+  if (file == "gophermap+" || file == "gopherplus") return L::GopherPlus;
+  // Shared extensions need only a bounded look at structural line prefixes.
+  // Do not guess a protocol from ordinary prose or take over .txt documents.
+  if (language == L::Gemini || language == L::Gopher || file == "index") {
+    auto probe = text.substr(0, 65536);
+    bool pre = false;
+    for (size_t i = 0; i < probe.size();) {
+      auto end = probe.find('\n', i); if (end == probe.npos) end = probe.size();
+      auto line = probe.substr(i, end-i);
+      if (language == L::Gemini && line.substr(0,3) == "```") pre = !pre;
+      else if (language == L::Gemini && !pre && line.substr(0,2) == "=:") return L::Spartan;
+      if (language == L::Gopher && line.substr(0,6) == "+INFO:") return L::GopherPlus;
+      if (file == "index" && line.substr(0,3) == "=> ") return L::Nex;
+      i = end < probe.size() ? end+1 : end;
+    }
+  }
   if (language != L::Plain) return language;
   if (text.substr(0,2) == "#!") {
     auto line = text.substr(2, text.find('\n') == text.npos ? text.size()-2 : text.find('\n')-2);
@@ -246,6 +271,172 @@ class Lexer {
       i=end<s.size()?end+1:end;
     }
   }
+  size_t lineFind(char c, size_t start, size_t end) const {
+    auto offset=s.substr(start,end-start).find(c);
+    return offset==s.npos?end:start+offset;
+  }
+  void link(size_t start, size_t end, bool relations = false) {
+    paint(start, start+2, Directive);
+    size_t url = start+2;
+    while (url < end && (s[url]==' ' || s[url]=='\t')) ++url;
+    size_t tail = url;
+    while (tail < end && s[tail]!=' ' && s[tail]!='\t') ++tail;
+    paint(url, tail, String);
+    size_t label = tail;
+    while (label < end && (s[label]==' ' || s[label]=='\t')) ++label;
+    paint(label, end, Key);
+    if (relations && end > label && s[end-1]==']') {
+      auto open = s.substr(label,end-label).rfind('[');
+      if (open != s.npos) paint(label+open,end,Type);
+    }
+  }
+  // Scroll's inline toggles are line bounded and Unicode aware. In particular,
+  // punctuation around an ASCII-art marker must not turn the rest into emphasis.
+  void scrollInline(size_t start, size_t end) {
+    auto point = [&](size_t p) -> gunichar {
+      if (p >= end) return 0;
+      auto c = g_utf8_get_char_validated(s.data()+p,end-p);
+      return c == gunichar(-1) || c == gunichar(-2) ? 0xfffd : c;
+    };
+    auto space = [](gunichar c) { return !c || c==0x200b || g_unichar_isspace(c); };
+    auto symbol = [](gunichar c) {
+      auto type = g_unichar_type(c);
+      return g_unichar_ispunct(c) || type==G_UNICODE_MATH_SYMBOL ||
+          type==G_UNICODE_CURRENCY_SYMBOL || type==G_UNICODE_MODIFIER_SYMBOL ||
+          type==G_UNICODE_OTHER_SYMBOL;
+    };
+    bool strong=false, emphasis=false, code=false;
+    for (size_t p=start;p<end;++p) {
+      char c=s[p];
+      bool marker=c=='*' || c=='_' || c=='`';
+      bool toggle=false;
+      if (marker) {
+        size_t prior=p;
+        if (prior>start) { --prior; while(prior>start && (static_cast<unsigned char>(s[prior])&0xc0)==0x80) --prior; }
+        auto left=p==start?0:point(prior), right=point(p+1);
+        toggle=((!space(left) && left!=gunichar(c)) || (!space(right) && right!=gunichar(c))) &&
+            !(symbol(left) && symbol(right));
+      }
+      Style before=code?String:strong?Heading:emphasis?Keyword:Normal;
+      if (toggle) {
+        if (c=='`') code=!code;
+        else if (!code && c=='*') strong=!strong;
+        else if (!code && c=='_') emphasis=!emphasis;
+      }
+      Style after=code?String:strong?Heading:emphasis?Keyword:Normal;
+      colors[p]=before!=Normal?before:after;
+    }
+  }
+  void smallText() {
+    const bool scroll=language==L::Scroll, nex=language==L::Nex;
+    bool pre=false;
+    for (size_t i=0;i<s.size();) {
+      auto finish=eol(i), end=finish;
+      if (end>i && s[end-1]=='\r') --end;
+      if (nex) {
+        if (at(i,"=> ")) link(i,end);
+      } else if (at(i,"```")) {
+        paint(i,end,Directive);pre=!pre;
+      } else if (pre) paint(i,end,String);
+      else if (scroll && s[i]=='\\') {
+        auto rest=s.substr(i+1,end-i-1);
+        bool escaped=rest.substr(0,2)=="=>" || rest.substr(0,2)=="=:" ||
+            rest.substr(0,3)=="```" || rest=="---" ||
+            (!rest.empty() && (rest[0]=='#' || rest[0]=='>' || rest[0]=='*'));
+        if (escaped) {
+          paint(i,i+1,Operator);
+          size_t prefix=i+2;
+          if (rest.substr(0,2)=="=>" || rest.substr(0,2)=="=:") prefix=i+3;
+          else if (rest.substr(0,3)=="```" || rest=="---") prefix=i+4;
+          else while(prefix<end && s[prefix]==s[i+1]) ++prefix;
+          scrollInline(prefix,end);
+        }
+        else scrollInline(i,end);
+      } else if (at(i,"=>") || (language==L::Spartan || scroll) && at(i,"=:")) link(i,end,scroll);
+      else if (i<end && s[i]=='#') paint(i,end,Heading);
+      else if (scroll && s.substr(i,end-i)=="---") paint(i,end,Directive);
+      else {
+        size_t body=i;
+        if (i<end && s[i]=='>') {
+          while (body<end && s[body]=='>') ++body;
+          if (!scroll) paint(i,end,Comment);
+          else { paint(i,body,Directive);scrollInline(body,end); }
+        } else if (i<end && s[i]=='*') {
+          size_t bullet=i+1;
+          if (scroll) while(bullet<end && s[bullet]=='*') ++bullet;
+          bool list=bullet<end && (s[bullet]==' ' || scroll && s[bullet]=='\t') && (!scroll || bullet-i<=4);
+          if (list) {
+            paint(i,bullet,Operator);body=bullet+1;
+            if (scroll) {
+              while(body<end && (s[body]==' ' || s[body]=='\t')) ++body;
+              size_t marker=body;
+              while(marker<end) {
+                auto c=g_utf8_get_char_validated(s.data()+marker,end-marker);
+                if (c==gunichar(-1) || c==gunichar(-2) || !g_unichar_isdigit(c)) break;
+                marker+=g_unichar_to_utf8(c,nullptr);
+              }
+              if (marker==body && marker<end && g_ascii_isalpha(s[marker])) ++marker;
+              if (marker>body && marker<end && s[marker]=='.') {
+                paint(body,marker+1,Number);body=marker+1;
+              }
+            }
+          }
+          if (scroll) scrollInline(body,end);
+        } else if (scroll) scrollInline(i,end);
+      }
+      i=finish<s.size()?finish+1:finish;
+    }
+  }
+  void gopherEntry(size_t start, size_t end) {
+    if (start>=end) return;
+    if (std::string_view("0123456789+TgIihds;cM").find(s[start])==s.npos) return;
+    auto tab=lineFind('\t',start+1,end);
+    if (tab>=end) return;
+    paint(start,start+1,Type);
+    auto fieldEnd=tab;
+    paint(start+1,fieldEnd,s[start]=='i'?Comment:Key);
+    size_t field=0;
+    for (size_t p=fieldEnd;p<end;++field) {
+      paint(p,p+1,Operator);
+      auto next=lineFind('\t',p+1,end);
+      paint(p+1,next,field==0?String:field==1?Variable:field==2?Number:Directive);
+      p=next;
+    }
+  }
+  void gopher() {
+    bool attribute=false, ask=false;
+    for (size_t i=0;i<s.size();) {
+      auto finish=eol(i),end=finish;if(end>i && s[end-1]=='\r') --end;
+      if (i<end) {
+        if (language==L::GopherPlus && s[i]=='+') {
+          auto colon=lineFind(':',i+1,end);
+          if (colon<end) {
+            attribute=true;ask=s.substr(i,colon-i)=="+ASK";
+            paint(i,colon+1,Directive);
+            size_t value=colon+1;while(value<end && s[value]==' ') ++value;
+            if (s.substr(i,colon-i)=="+INFO") gopherEntry(value,end);
+            else paint(value,end,Key);
+          } else paint(i,end,Directive);
+        } else if (attribute && (s[i]==' ' || s[i]=='\t')) {
+          if (ask) {
+            size_t word=i;while(word<end && (s[word]==' ' || s[word]=='\t')) ++word;
+            size_t colon=lineFind(':',word,end);
+            paint(word,colon,Keyword);
+            if (colon<end) paint(colon,colon+1,Operator);
+          } else {
+            auto colon=lineFind(':',i,end);if(colon<end) paint(i+1,colon,Key);
+          }
+        } else {
+          attribute=false;ask=false;
+          if (s[i]=='#') paint(i,end,Comment);
+          else if (s[i]=='!' && i==0) paint(i,end,Heading);
+          else if (std::string_view("-:=").find(s[i])!=s.npos || end==i+1 && std::string_view("~%*.").find(s[i])!=s.npos) paint(i,end,Directive);
+          else gopherEntry(i,end);
+        }
+      }
+      i=finish<s.size()?finish+1:finish;
+    }
+  }
   void diff() {
     for(size_t i=0;i<s.size();) {
       auto end=eol(i);Style style=Normal;
@@ -264,6 +455,8 @@ public:
     if(language==L::Html || language==L::Xml){markup();return colors;}
     if(language==L::Markdown){markdown();return colors;}
     if(language==L::Diff){diff();return colors;}
+    if(language==L::Gemini || language==L::Spartan || language==L::Nex || language==L::Scroll){smallText();return colors;}
+    if(language==L::Gopher || language==L::GopherPlus){gopher();return colors;}
     bool hash=language==L::Python || language==L::Shell || language==L::Yaml || language==L::Toml || language==L::Ini || language==L::Make || language==L::CMake;
     bool slash=language==L::Cpp || language==L::Rust || language==L::JavaScript || language==L::Go || language==L::Java || language==L::CSharp;
     bool block=slash || language==L::Css || language==L::Sql;

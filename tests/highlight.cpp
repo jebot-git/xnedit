@@ -78,6 +78,75 @@ int main() {
   token(L::CMake,"set(VAR ${OTHER})","${OTHER}",Variable);
   token(L::Diff,"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n","-old",Deletion);
   token(L::Diff,"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n","+new",Addition);
+  assert(detect("INDEX.GMI", "# Title")==L::Gemini);
+  assert(detect("page.gemtext", "")==L::Gemini);
+  assert(detect("page.gmi", "```\n=: /not-a-prompt\n```\n")==L::Gemini);
+  assert(detect("page.gmi", "=: /submit Sign the guestbook")==L::Spartan);
+  assert(detect("page.spartan", "")==L::Spartan);
+  assert(detect("gophermap", "Welcome\n1Menu\t/menu\n")==L::Gopher);
+  assert(detect("include.GOPHERMAP", "")==L::Gopher);
+  assert(detect("gophermap", "+INFO: 1Menu\t/menu\thost\t70\t+\n")==L::GopherPlus);
+  assert(detect("page.gopher+", "")==L::GopherPlus);
+  assert(detect("page.gopherplus", "")==L::GopherPlus);
+  assert(detect("index", "Hello\n=> ../about.txt About\n")==L::Nex);
+  assert(detect("index", "plain text")==L::Plain);
+  assert(detect("index.txt", "=> nex://host/\n")==L::Plain);
+  assert(detect("index.nex", "")==L::Nex);
+  assert(detect("page.SCROLL", "")==L::Scroll);
+  token(L::Gemini,"#日本語\n", "#日本語",Heading);
+  token(L::Gemini,"=>gemini://example/ héllo 世界", "gemini://example/",String);
+  token(L::Gemini,"=> /about Label", "=>",Directive);
+  token(L::Gemini,"=> /about Label", "Label",Key);
+  token(L::Gemini,"* item\n> quoted", "*",Operator);
+  token(L::Gemini,"* item\n> quoted", "> quoted",Comment);
+  token(L::Gemini,"*strong* _emphasis_ `code` [link](url)","*strong* _emphasis_ `code` [link](url)",Normal);
+  token(L::Gemini,"  # not a heading", "# not a heading",Normal);
+  token(L::Gemini,"``` alt text\r\n=> /literal #plain\r\n``` end\r\n=> /real Link", "=> /literal #plain",String);
+  token(L::Gemini,"``` alt text\n# unfinished", "# unfinished",String);
+  token(L::Gemini,"=: /submit Prompt", "=: /submit Prompt",Normal);
+  token(L::Spartan,"=: /submit Prompt", "=:",Directive);
+  token(L::Spartan,"=:\t/submit\tPrompt", "/submit",String);
+  token(L::Spartan,"=: /submit Prompt", "Prompt",Key);
+  token(L::Nex,"# ASCII title\n* text\n```\n", "# ASCII title",Normal);
+  token(L::Nex,"=> ../directory/ Optional text", "../directory/",String);
+  token(L::Nex,"=> ../directory/ Optional text", "Optional text",Key);
+  token(L::Nex,"=>/not-a-link\n=>\t/not-a-link", "=>/not-a-link",Normal);
+  token(L::Gopher,"Informational text without tabs", "Informational text without tabs",Normal);
+  token(L::Gopher,"1Menu\t/path\thost.example\t70\t+", "1",Type);
+  token(L::Gopher,"1Menu\t/path\thost.example\t70\t+", "Menu",Key);
+  token(L::Gopher,"1Menu\t/path\thost.example\t70\t+", "/path",String);
+  token(L::Gopher,"1Menu\t/path\thost.example\t70\t+", "host.example",Variable);
+  token(L::Gopher,"1Menu\t/path\thost.example\t70\t+", "70",Number);
+  token(L::Gopher,"1Menu\t/path\thost.example\t70\t+", "+",Directive);
+  token(L::Gopher,"iInfo 世界\tignored\thost\t0", "Info 世界",Comment);
+  token(L::Gopher,"hWeb\tURL:https://example/\r\n", "URL:https://example/",String);
+  token(L::Gopher,"!Title\n# Comment\n=include\n.", "!Title",Heading);
+  token(L::Gopher,"# Comment", "# Comment",Comment);
+  token(L::Gopher,"=include", "=include",Directive);
+  token(L::GopherPlus,"+INFO: 1Menu\t/path\thost\t70\t+", "+INFO:",Directive);
+  token(L::GopherPlus,"+INFO: 1Menu\t/path\thost\t70\t+", "/path",String);
+  token(L::GopherPlus,"+ADMIN:\n Admin: Name <mail@example>\n", "Admin",Key);
+  token(L::GopherPlus,"+ASK:\r\n AskP: Password\r\n", "AskP",Keyword);
+  token(L::GopherPlus,"+VIEWS:\n text/plain en: <1k>\n", "text/plain en",Key);
+  token(L::Scroll,"##### Minor heading", "Minor heading",Heading);
+  token(L::Scroll,"---\ntext", "---",Directive);
+  token(L::Scroll,"** １２. Nested item", "**",Operator);
+  token(L::Scroll,"** １２. Nested item", "１２.",Number);
+  token(L::Scroll,"* a. Alphabetical", "a.",Number);
+  token(L::Scroll,"=> #3.2 Title [Citation]", "#3.2",String);
+  token(L::Scroll,"=> #3.2 Title [Citation]", "[Citation]",Type);
+  token(L::Scroll,"=: /search Search [+]", "=:",Directive);
+  token(L::Scroll,"word *bold 世界* normal", "*bold 世界*",Heading);
+  token(L::Scroll,"word _emphasis_ normal", "_emphasis_",Keyword);
+  token(L::Scroll,"word `*literal* _also_` normal", "`*literal* _also_`",String);
+  token(L::Scroll,"word *unclosed\nnormal next", "normal next",Normal);
+  token(L::Scroll,"symbol ✦*✦ normal", "✦*✦",Normal);
+  token(L::Scroll,"word *\u200b rest", "*",Normal);
+  token(L::Scroll,"\\=> /literal *bold*", "=> /literal ",Normal);
+  token(L::Scroll,"\\=> /literal *bold*", "*bold*",Heading);
+  token(L::Scroll,"\\``` escaped\n# heading", "# heading",Heading);
+  token(L::Scroll,"```plain\n*not markup*\n```\n# heading", "*not markup*",String);
+  token(L::Scroll,"```plain\n*not markup*\n```\n# heading", "# heading",Heading);
   // Partial tokens during typing, arbitrary bytes and delimiter truncation must
   // always produce a style for each source byte without reading past the buffer.
   const std::string seed="é日 r###\" x /* nested */ ```python\n'#\\$<<[=[\n";
@@ -91,9 +160,9 @@ int main() {
     std::string bytes;for(int i=0;i<256;++i)bytes+=char(generator()%256);
     assert(colorize(bytes,mode.language).size()==bytes.size());
   }
-  for(auto mode:{L::Cpp,L::Toml,L::Ini,L::Markdown,L::JavaScript}) {
+  for(auto mode:{L::Cpp,L::Toml,L::Ini,L::Markdown,L::JavaScript,L::Gopher,L::GopherPlus,L::Scroll}) {
     std::string incomplete;
-    for(int i=0;i<15000;++i)incomplete += mode==L::Cpp?"#include <unfinished\n":mode==L::Markdown?"[unfinished `code\n":mode==L::JavaScript?"x = /[[unclosed /[ /[\n":"[section\n";
+    for(int i=0;i<15000;++i)incomplete += mode==L::Gopher?"Info text without tabs\n":mode==L::GopherPlus?"+UNFINISHED\n Ask: value\n":mode==L::Scroll?"=> /url Label ]\n":mode==L::Cpp?"#include <unfinished\n":mode==L::Markdown?"[unfinished `code\n":mode==L::JavaScript?"x = /[[unclosed /[ /[\n":"[section\n";
     assert(colorize(incomplete,mode).size()==incomplete.size());
   }
   auto plain=colorize(std::string(limit+1,'x'),L::Cpp);
