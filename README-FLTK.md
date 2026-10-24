@@ -68,6 +68,84 @@ xnedit --version
 xnedit --build-options
 ```
 
+## Remote editing with Gemini, Titan and Spartan
+
+Use **Remote → Retrieve page...** (`Ctrl+Alt+O`) or launch:
+
+```sh
+xnedit gemini://jebot.dog/
+xnedit spartan://jebot.dog/
+```
+
+The response opens in a document tab with Gemtext highlighting when its MIME
+is `text/gemini`. Edit normally, then use **Remote → Push document...**
+(`Ctrl+Alt+S`) to review the destination, MIME type and optional token.
+**Save / Ctrl+S** on a remote tab pushes to its associated upload URL. A local
+file can also be published through this dialog; its local tab is preserved and
+the confirmed remote copy opens separately. **Save as...** writes a local file
+and makes that tab a local document. The editor does not register itself as the
+system Gemini browser.
+
+For Gemini/Titan, choose **Remote → Connection settings...** before accessing a private capsule.
+You can use an anonymous connection, an owner-only PEM private key with its
+certificate, or select an existing **Penguin Mail** identity. For Jebot, load
+Penguin Mail's default `misfin/state.json` and select `jebot@jebot.dog`. The
+editor retains only the identity reference or PEM file paths; private keys
+remain in their existing store. Encrypted PEM keys are not supported.
+
+On the first Gemini/Titan connection, review the server name and SHA-256 certificate fingerprint.
+A changed certificate needs fresh confirmation. Server hostname and validity
+checks remain mandatory. Trust is checked before sending the resource request
+or upload. Cross-server redirects are blocked; open the destination explicitly
+and choose an identity for that server.
+
+Before pushing, the editor retrieves the read URL and compares its original
+bytes with the revision you retrieved. Conflicts stop the upload and offer an
+explicit overwrite choice. Identical remote contents are recognized without a
+duplicate upload. This is a preflight check, not an atomic server-side lock;
+servers need version/transaction support to eliminate simultaneous-write races.
+
+Transfers run in the background. **Remote → Cancel transfer** cancels current
+and queued work. Edits made while pushing remain modified after the earlier
+snapshot is confirmed. A reload that overlaps new edits opens its result in a
+separate tab. **Remote → Reload remote page** retrieves the associated source
+again. Closing a tab is blocked while its transfer is running; Save from the
+close prompt starts its push, after which the tab can be closed.
+
+Remote edits are included in the existing private recovery copies, including
+the read/push URLs and revision fingerprint. Optional Titan tokens are kept
+only in memory for the tab; use the push dialog to re-enter them after restart.
+Tokens must be printable ASCII without whitespace or semicolons. They and
+private-key data are excluded from editor settings and recovery metadata.
+
+Downloads and uploads are limited to 8 MiB. Remote editing accepts UTF-8/ASCII
+text, preserves UTF-8 BOM and LF/CRLF/CR, and rejects binary data or a different
+declared charset. Failed/unconfirmed uploads leave edits modified. An
+unconfirmed push may have arrived, so retrieve before retrying. A successful
+same-server publication redirect is verified against the uploaded bytes. The
+only automatic retry is one explicit Gemini/Titan status-44 slowdown response with a delay
+of at most five seconds; ambiguous failures are never retried automatically.
+
+Remote preferences and certificate pins are stored privately in
+`$XDG_CONFIG_HOME/xnedit-xr/remote.json`. The network implementation uses GIO
+and OpenSSL 3; the UI remains native Wayland/FLTK with DomeD's universal menu.
+
+Spartan uses plaintext TCP (port 300 by default), with the same `spartan://`
+URL for retrieval and upload. Uploads send the document bytes directly, without
+TLS, client identities, MIME parameters or tokens. The push dialog disables the
+Titan-only fields for Spartan. Empty documents are rejected before connecting:
+a zero-length Spartan request is a retrieval, not an upload. Query-bearing URLs
+are rejected in this editing workflow because Spartan interprets query data as
+an upload. Same-server path redirects are supported; a publication redirect is
+verified by retrieving and comparing its contents. Spartan writes are never
+retried automatically. A Spartan client-error response during the preflight
+needs explicit overwrite/create confirmation because it cannot distinguish a
+missing page from other client errors.
+
+Publishing requires a server-side Titan or Spartan upload handler. The deployed
+`jebot.dog` services were checked for retrieval; uploads and the editor workflow
+were tested with isolated protocol fixtures without modifying public pages.
+
 ## Syntax highlighting
 
 Language detection uses the filename, extension and interpreter shebang, including
@@ -173,7 +251,9 @@ XNEDIT_TEST_BINARY="$PWD/build-x11/xnedit" \
   uv run --no-project --with dbus-next --with python-xlib --with pillow python tests/test-ui.py
 ```
 
-CTest covers the document model, language lexers and search/replacement semantics.
+CTest covers the document model, language lexers, search/replacement semantics,
+and real TLS Gemini/Titan transfers with trust, identity, conflict, cancellation
+and interrupted-publication tests.
 The first UI test uses a private real DomeD compositor and verifies mandatory
 Wayland, menu association and actual keyboard editing/saving. Its native editor
 fixture also checks split-pane highlighting, language changes, the regex helper,

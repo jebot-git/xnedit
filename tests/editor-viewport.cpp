@@ -178,6 +178,51 @@ int main() {
   auto before = page->doc.text();
   press(editor, FL_KP_Enter);
   assert(page->doc.text() == before);
-  window.hide();
   std::cout << "PASS Keypad Enter respects read-only mode\n";
+  if(auto uri=getenv("XNEDIT_REMOTE_TEST_URL")) {
+    auto waitRemote=[&]{auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);while(window.remoteBusy()&&std::chrono::steady_clock::now()<end){Fl::wait(.01);window.poll();}assert(!window.remoteBusy());settle();};
+    window.retrieveRemote(uri);waitRemote();auto remote=window.current();
+    assert(remote->remote && remote->doc.text()=="# Original\nHello 世界\n" && remote->doc.eol=="CRLF");
+    assert(remote->detectedLanguage==highlight::Language::Gemini && remote->doc.path.empty() && !remote->doc.modified());
+    remote->doc.replace(0,remote->doc.length(),"# Remote UI\nEdited 世界\n");remote->refresh();
+    window.command("Save");waitRemote();assert(!remote->doc.modified());
+    std::cout<<"PASS Native remote retrieve, Gemtext mode, UTF-8/CRLF preservation and Ctrl+S Titan push\n";
+    capture(window,"remote-page");
+    remote->doc.replace(remote->doc.length(),remote->doc.length(),"snapshot\n");remote->refresh();window.command("Save");
+    remote->doc.replace(remote->doc.length(),remote->doc.length(),"later\n");remote->refresh();waitRemote();assert(remote->doc.modified());
+    auto originalEdits=remote->doc.text();window.retrieveRemote(uri,remote);
+    remote->doc.replace(remote->doc.length(),remote->doc.length(),"during reload\n");remote->refresh();waitRemote();
+    assert(window.current()!=remote && remote->doc.text()==originalEdits+"during reload\n");
+    std::cout<<"PASS Edits made during push stay dirty; edits made during reload are retained in their original tab\n";
+    window.recoverSave();Json recovery;std::ifstream(remote->recovery)>>recovery;
+    assert(recovery["remote"]["read"]==uri && recovery["remote"].contains("baseline"));
+    assert(recovery.dump().find("PRIVATE KEY")==std::string::npos);
+    window.showRemoteIdentity();settle();
+    Fl_Window *identityDialog=nullptr;for(auto w=Fl::first_window();w;w=Fl::next_window(w))if(std::string(w->label()?w->label():"")=="Remote identity — XNEdit XR")identityDialog=w;
+    assert(identityDialog);auto identities=dynamic_cast<Fl_Choice *>(widget(*identityDialog,"Penguin identity:"));assert(identities && identities->text() && std::string(identities->text())=="test@@localhost");
+    capture(*identityDialog,"remote-identity");widget(*identityDialog,"Cancel")->do_callback();
+    window.pushRemote(window.current(),true);settle();Fl_Window *pushDialog=nullptr;
+    for(auto w=Fl::first_window();w;w=Fl::next_window(w))if(std::string(w->label()?w->label():"")=="Push remote document — XNEdit XR")pushDialog=w;
+    assert(pushDialog);auto secret=dynamic_cast<Fl_Input *>(widget(*pushDialog,"Token:"));assert(secret);secret->value("ui-secret");
+    capture(*pushDialog,"remote-push");widget(*pushDialog,"Cancel")->do_callback();assert(std::string(secret->value()).empty());
+    std::cout<<"PASS Remote recovery metadata, private identity selection and non-persistent push-token dialog\n";
+  }
+  if(auto uri=getenv("XNEDIT_SPARTAN_TEST_URL")) {
+    auto waitRemote=[&]{auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);while(window.remoteBusy()&&std::chrono::steady_clock::now()<end){Fl::wait(.01);window.poll();}assert(!window.remoteBusy());settle();};
+    window.retrieveRemote(uri);waitRemote();auto remote=window.current();
+    assert(remote->remote && remote->remote->identity.empty() && remote->doc.text()=="# Original\nHello 世界\n");
+    assert(remote->detectedLanguage==highlight::Language::Spartan && remote->remote->pushUrl==uri);
+    remote->doc.replace(0,remote->doc.length(),"# Spartan UI\n=: /submit Prompt\nEdited 世界\n");remote->refresh();
+    window.command("Save");waitRemote();assert(!remote->doc.modified());capture(window,"remote-spartan");
+    remote->doc.replace(remote->doc.length(),remote->doc.length(),"later edit\n");remote->refresh();window.recoverSave();
+    Json recovery;std::ifstream(remote->recovery)>>recovery;
+    assert(recovery["remote"]["read"]==uri && recovery["remote"]["push"]==uri && recovery["remote"]["identity"]["penguin_id"]=="");
+    window.pushRemote(remote,true);settle();Fl_Window *dialog=nullptr;
+    for(auto w=Fl::first_window();w;w=Fl::next_window(w))if(std::string(w->label()?w->label():"")=="Push remote document — XNEdit XR")dialog=w;
+    assert(dialog);auto mime=widget(*dialog,"MIME type:");auto token=dynamic_cast<Fl_Input *>(widget(*dialog,"Token:"));
+    assert(mime && !mime->active() && token && !token->active() && std::string(token->value()).empty());
+    capture(*dialog,"remote-spartan-push");widget(*dialog,"Cancel")->do_callback();
+    std::cout<<"PASS Native Spartan retrieve/edit/upload, syntax mode, recovery and protocol-specific push controls\n";
+  }
+  window.hide();
 }

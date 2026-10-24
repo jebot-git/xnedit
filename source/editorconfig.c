@@ -503,10 +503,13 @@ static void destroy_section(ECSection *sec) {
     
     ECKeyValue *v = sec->values;
     while(v) {
+        ECKeyValue *next = v->next;
         free(v->name);
         free(v->value);
-        v = v->next;
+        free(v);
+        v = next;
     }
+    free(sec);
 }
 
 void ECDestroy(ECFile *ecf) {

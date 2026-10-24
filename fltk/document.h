@@ -54,6 +54,9 @@ public:
            bom != savedBom;
   }
   void load(const fs::path &);
+  void loadContents(const std::string &bytes);
+  void markSaved(const std::string &snapshot, const std::string &savedEncoding,
+                 const std::string &savedEol, bool savedBom);
   void assign(const std::string &, bool clean = false);
   void replace(int, int, const std::string &, bool record = true);
   bool canUndo() const { return !past.empty(); }

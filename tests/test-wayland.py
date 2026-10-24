@@ -5,6 +5,8 @@ from pathlib import Path
 from Xlib import X,XK,display
 from Xlib.ext import xtest
 from PIL import Image
+from remote import Fixture
+from spartan import Fixture as SpartanFixture
 signal.pthread_sigmask(signal.SIG_SETMASK,[])
 if os.environ.get('XNEDIT_WL_BUS')!='1':os.execvpe('dbus-run-session',['dbus-run-session','--',sys.executable,*sys.argv],{**os.environ,'XNEDIT_WL_BUS':'1'})
 root=Path(__file__).resolve().parents[1];out=root/'build-fltk/wayland-test';out.mkdir(parents=True,exist_ok=True);children=[];logs=[];checks=[]
@@ -35,8 +37,20 @@ with tempfile.TemporaryDirectory(prefix='xnedit-wayland-')as tmp:
   compositor=start([os.environ.get('DOME_COMPOSITOR','/usr/local/bin/dome-compositor'),'--backend','nested'],'compositor',env)
   log=wait(lambda:(out/'compositor.log').read_text()if'Dome Wayland socket:'in(out/'compositor.log').read_text()else None)
   env['WAYLAND_DISPLAY']=re.search(r'Dome Wayland socket: (\S+)',log)[1]
-  viewport=subprocess.run([str(root/'build-fltk/editor-viewport-test')],env={**env,'XNEDIT_UI_CAPTURE_DIR':str(out)},capture_output=True,text=True,timeout=30)
+  remote_fixture=Fixture(Path(tmp))
+  spartan_fixture=SpartanFixture()
+  settings=Path(tmp)/'config/xnedit-xr';settings.mkdir(parents=True,exist_ok=True)
+  identity_store=Path(tmp)/'penguin-state.json'
+  identity_store.write_text(json.dumps({'identities':[{'id':'ui-test','address':'test@localhost','certificate':remote_fixture.client.read_text(),'key':remote_fixture.client_key.read_text()}]}));identity_store.chmod(0o600)
+  (settings/'remote.json').write_text(json.dumps({'pins':remote_fixture.pin,'identity':{'penguin_store':str(identity_store),'penguin_id':'ui-test'},'last_url':remote_fixture.url+'/page.gmi'}));(settings/'remote.json').chmod(0o600)
+  env['XNEDIT_REMOTE_TEST_URL']=remote_fixture.url+'/page.gmi'
+  env['XNEDIT_SPARTAN_TEST_URL']=spartan_fixture.url+'/page.gmi'
+  viewport=subprocess.run([str(root/'build-fltk/editor-viewport-test')],env={**env,'XNEDIT_UI_CAPTURE_DIR':str(out),'XDG_STATE_HOME':tmp+'/viewport-state'},capture_output=True,text=True,timeout=30)
   (out/'viewport.log').write_text(viewport.stdout+viewport.stderr)
+  remote_fixture.close()
+  spartan_fixture.close()
+  check(any(event[1]>0 and event[2].startswith(b'# Spartan UI') for event in spartan_fixture.events),'native Spartan editor uploads the edited bytes over plaintext TCP')
+  check(any(event[0]=='titan' and event[2].startswith(b'# Remote UI') and event[4] for event in remote_fixture.events),'native remote editor pushes exact content with its selected client identity')
   check(viewport.returncode==0,'editor viewport, language modes, regex helper and find/replace regressions pass on native Wayland')
   for capture in out.glob('*.ppm'):
    Image.open(capture).save(capture.with_suffix('.png'))
@@ -61,6 +75,8 @@ with tempfile.TemporaryDirectory(prefix='xnedit-wayland-')as tmp:
   check(len(set(im.getdata()))>20,'DomeD renders the editor and search controls')
   key('Escape');key('q',True);wait(lambda:app.poll()is not None);check(app.returncode==0,'native Wayland editor closes cleanly');xd.close()
  finally:
+  if "remote_fixture" in locals():remote_fixture.close()
+  if "spartan_fixture" in locals():spartan_fixture.close()
   for child in reversed(children):
    if child.poll()is None:
     child.terminate()

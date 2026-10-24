@@ -191,6 +191,14 @@ void Document::load(const fs::path &file) {
   path = full;
   editorConfig();
   auto bytes = read(full);
+  loadContents(bytes);
+  path = full;
+  diskDigest = digest(bytes);
+  observedSignature.clear();
+  editorConfig();
+}
+void Document::loadContents(const std::string &bytes) {
+  if (bytes.size() > 64 * 1024 * 1024) throw std::runtime_error("Document exceeds 64 MiB");
   auto s = utf8Decode(bytes, encoding, bom);
   eol = s.find("\r\n") != std::string::npos ? "CRLF"
         : s.find('\r') != std::string::npos ? "CR"
@@ -204,11 +212,15 @@ void Document::load(const fs::path &file) {
     } else
       normalized += s[i];
   }
-  path = full;
   assign(normalized, true);
-  diskDigest = digest(bytes);
-  observedSignature.clear();
-  editorConfig();
+}
+void Document::markSaved(const std::string &snapshot, const std::string &enc,
+                         const std::string &ending, bool withBom) {
+  saved = snapshot;
+  savedEncoding = enc;
+  savedEol = ending;
+  savedBom = withBom;
+  checkedRevision = ~uint64_t(0);
 }
 void Document::replace(int start, int end, const std::string &value,
                        bool record) {

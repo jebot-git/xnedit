@@ -89,6 +89,14 @@ int main() {
     tooLarge = true;
   }
   assert(tooLarge && d.text() == "a a" && !d.modified() && !d.canUndo());
+  Document remote;
+  remote.loadContents("# Remote\r\n");
+  assert(remote.text()=="# Remote\n" && remote.eol=="CRLF" && !remote.modified());
+  auto snapshot=remote.text();
+  remote.replace(remote.length(),remote.length(),"later edit\n");
+  remote.markSaved(snapshot,"UTF-8","CRLF",false);
+  assert(remote.modified()); // an upload of the older snapshot cannot clear new edits
+  remote.undo();assert(!remote.modified());
   fs::remove_all(dir);
   std::cout << "PASS upstream buffer undo/redo, regex captures, replacement, "
                "UTF-16/CRLF roundtrip and external-write protection\n";

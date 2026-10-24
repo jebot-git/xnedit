@@ -7,6 +7,10 @@
 #include "highlight.h"
 #include "regex-helper.h"
 #include "gpu-window.h"
+#include "remote.h"
+#include "remote-dialog.h"
+#include <future>
+#include <deque>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
@@ -24,6 +28,35 @@
 #include <unordered_set>
 class Window;
 struct Page;
+struct RemoteDocument {
+  std::string readUrl, pushUrl, baseline, mime = "text/gemini";
+  smallnet::Identity identity;
+};
+static Json identityJson(const smallnet::Identity &i) {
+  return {{"certificate",i.certificate},{"key",i.key},{"penguin_store",i.penguinStore},{"penguin_id",i.penguinId}};
+}
+static smallnet::Identity identityFromJson(const Json &j) {
+  return {j.value("certificate", ""),j.value("key", ""),j.value("penguin_store", ""),j.value("penguin_id", "")};
+}
+struct RemoteOperation {
+  enum Kind { Fetch, Push } kind=Fetch;
+  Page *page=nullptr;
+  RemoteDocument document;
+  std::string bytes, snapshot, encoding="UTF-8", eol="LF", token;
+  bool bom=false, overwrite=false, wasRemote=false, readOnly=false;
+  uint64_t generation=0;
+};
+struct RemoteOutcome {
+  enum Kind { Done, Trust, Changed, Error } kind=Done;
+  smallnet::Response response;
+  smallnet::Published published;
+  std::string message, peer, fingerprint, previous, subject;
+};
+struct RemoteJob {
+  RemoteOperation operation;
+  std::shared_ptr<GCancellable> cancel{g_cancellable_new(),[](GCancellable *p){g_object_unref(p);}};
+  std::future<RemoteOutcome> future;
+};
 class Editor : public Fl_Text_Editor {
 public:
   Page *page = nullptr;
@@ -33,6 +66,10 @@ public:
 struct Page : Fl_Group {
   Window *owner;
   Document doc;
+  std::optional<RemoteDocument> remote;
+  std::string remoteToken;
+  fs::path displayPath() const { return remote ? fs::path(smallnet::parse(remote->readUrl).path) : doc.path; }
+  std::string displayName() const { auto name=displayPath().filename().string();return remote?(name.empty()?smallnet::parse(remote->readUrl).host:name)+(smallnet::parse(remote->readUrl).scheme=="spartan"?" (Spartan)":" (Gemini)"):doc.path.empty()?"Untitled":name; }
   Fl_Text_Buffer text, style;
   Editor *first, *second;
   Editor *active = nullptr;
@@ -90,6 +127,13 @@ class Window : public dx::GpuWindow {
   Fl_Button regexHelp{820,0,88,30,"Regex help"};
   Fl_Box status{8, 755, 1084, 25};
   std::unique_ptr<RegexHelper> regexHelper;
+  std::unique_ptr<ConnectionDialog> connectionDialog;
+  std::unique_ptr<PushDialog> pushDialog;
+  std::unique_ptr<RemoteJob> remoteJob;
+  std::deque<RemoteOperation> pendingRetrievals;
+  smallnet::Identity remoteIdentity;
+  std::map<std::string,std::string> remotePins;
+  std::string lastRemoteUrl="gemini://jebot.dog/", remoteFeedback;
   std::string searchFeedback;
   std::unique_ptr<DesktopMenu> desktop;
   std::vector<Page *> pages;
@@ -144,6 +188,11 @@ public:
              {"File/Save as...", FL_CTRL + FL_SHIFT + 's'},
              {"File/Save all", 0},
              {"File/Reload from disk", 0},
+             {"Remote/Retrieve page...", FL_CTRL + FL_ALT + 'o'},
+             {"Remote/Push document...", FL_CTRL + FL_ALT + 's'},
+             {"Remote/Reload remote page", FL_CTRL + FL_ALT + 'r'},
+             {"Remote/Connection settings...", 0},
+             {"Remote/Cancel transfer", 0},
              {"File/Close tab", FL_CTRL + 'w'},
              {"File/Quit", FL_CTRL + 'q'},
              {"Edit/Undo", FL_CTRL + 'z'},
@@ -231,11 +280,15 @@ public:
     size_range(640, 400);
     xclass("org.domed.XNEdit");
     loadSettings();
+    loadRemoteSettings();
     resize(x(), y(), w(), h());
     Fl::add_timeout(.2, timer, this);
     end();
   }
   ~Window() {
+    if(remoteJob){g_cancellable_cancel(remoteJob->cancel.get());remoteJob->future.wait();}
+    if(connectionDialog)connectionDialog->hide();
+    if(pushDialog)pushDialog->hide();
     Fl::remove_timeout(timer, this);
     saveSettings();
     for (auto p : pages) {
@@ -255,6 +308,14 @@ public:
     }
     return dx::GpuWindow::handle(event);
   }
+  bool remoteBusy() const { return bool(remoteJob); }
+  void loadRemoteSettings();
+  void saveRemoteSettings();
+  void startRemote(RemoteOperation);
+  void finishRemote();
+  void retrieveRemote(const std::string &, Page *replace=nullptr, bool readOnly=false);
+  void showRemoteIdentity();
+  void pushRemote(Page *, bool prompt=true);
   Page *current() { return dynamic_cast<Page *>(tabs.value()); }
   void resize(int x, int y, int w, int h) override {
     dx::GpuWindow::resize(x, y, w, h);
@@ -340,6 +401,7 @@ public:
       if (!page || page->doc.modified() || !page->doc.path.empty() ||
           page->doc.length())
         page = newDocument();
+      page->remote.reset();page->remoteToken.clear();
       page->doc.encoding = model->encoding;
       page->doc.eol = model->eol;
       page->doc.bom = model->bom;
@@ -389,6 +451,7 @@ public:
   bool save(Page *page, bool as = false) {
     if (!page)
       return true;
+    if(page->remote && !as) { pushRemote(page,false); return false; }
     if (page->doc.readOnly && !as) {
       status.copy_label(
           "Read-only document: use Save as to write another file");
@@ -404,6 +467,7 @@ public:
         pick.options(Fl_Native_File_Chooser::SAVEAS_CONFIRM);
         if (!target.empty())
           pick.preset_file(target.c_str());
+        else if(page->remote)pick.preset_file(page->displayPath().filename().c_str());
         if (pick.show())
           return false;
         target = pick.filename();
@@ -416,6 +480,7 @@ public:
               "Cancel", "Replace", nullptr) != 1)
         return false;
       page->doc.save(target, changed || choseTarget);
+      page->remote.reset();page->remoteToken.clear();
       if (!page->recovery.empty())
         fs::remove(page->recovery);
       page->labelChanged();
@@ -427,6 +492,7 @@ public:
     }
   }
   bool allowClose(Page *page) {
+    if(remoteJob && remoteJob->operation.page==page){status.copy_label("Transfer running; use Remote → Cancel transfer before closing this tab.");return false;}
     if (!page->doc.modified())
       return true;
     int answer =
@@ -459,11 +525,15 @@ public:
   void quit() {
     if (closing)
       return;
+    pendingRetrievals.clear();
+    if(remoteJob){g_cancellable_cancel(remoteJob->cancel.get());remoteFeedback="Canceling transfer; close again when it finishes.";return;}
     for (auto p : pages)
       if (!allowClose(p))
         return;
     closing = true;
     if (regexHelper) regexHelper->hide();
+    if (connectionDialog) connectionDialog->hide();
+    if (pushDialog) pushDialog->hide();
     hide();
   }
   void updateTitle() {
@@ -471,7 +541,7 @@ public:
     if (!p)
       return;
     std::string title =
-        (p->doc.path.empty() ? "Untitled" : p->doc.path.filename().string()) +
+        p->displayName() +
         (p->doc.modified() ? " *" : "") + " — XNEdit XR";
     copy_label(title.c_str());
     redraw();
@@ -585,6 +655,14 @@ public:
       }
       if (name == "New")
         newDocument();
+      else if ((name == "Retrieve page..." || name == "Retrieve Gemini page...")) {
+        auto url=fl_input("Gemini or Spartan URL to retrieve:",lastRemoteUrl.c_str());if(url)retrieveRemote(url);
+      } else if ((name == "Push document..." || name == "Push via Titan...")) pushRemote(p,true);
+      else if (name == "Connection settings...") showRemoteIdentity();
+      else if (name == "Cancel transfer") {pendingRetrievals.clear();if(remoteJob)g_cancellable_cancel(remoteJob->cancel.get());}
+      else if (name == "Reload remote page") {
+        if(p && p->remote && (!p->doc.modified() || fl_choice("Discard these edits and retrieve the remote page again?","Cancel","Retrieve",nullptr)==1))retrieveRemote(p->remote->readUrl,p);
+      }
       else if (name == "Regex helper...")
         showRegexHelper();
       else if (name == "Open...")
@@ -792,6 +870,8 @@ public:
     }
   }
   void poll() {
+    finishRemote();
+    if(!remoteJob && !pendingRetrievals.empty()){auto next=std::move(pendingRetrievals.front());pendingRetrievals.pop_front();startRemote(std::move(next));}
     auto p = current();
     if (!p)
       return;
@@ -802,7 +882,7 @@ public:
       resize(x(), y(), w(), h());
     }
     for (auto page : pages)
-      if (page->revision != page->styled || page->highlightedPath != page->doc.path)
+      if (page->revision != page->styled || page->highlightedPath != page->displayPath())
         page->highlight();
     for (auto &mode : highlight::modes()) {
       auto item = const_cast<Fl_Menu_Item *>(menu.find_item((std::string("Document/Language/") + mode.name).c_str()));
@@ -824,8 +904,10 @@ public:
         highlight::name(p->detectedLanguage) + " · " +
         (p->doc.diskChanged() && !p->doc.path.empty() ? "Changed on disk · "
                                                       : "") +
-        (p->doc.path.empty() ? "Untitled" : p->doc.path.string());
+        (p->remote ? p->remote->readUrl : p->doc.path.empty() ? "Untitled" : p->doc.path.string());
     if (searchOpen && !searchFeedback.empty()) info += " · " + searchFeedback;
+    if(remoteJob)info+=" · Remote transfer in progress";
+    else if(!remoteFeedback.empty())info+=" · "+remoteFeedback;
     status.copy_label(info.c_str());
     dx::enable_menu(menu, "Edit/Undo", p->doc.canUndo() && !p->doc.readOnly);
     dx::enable_menu(menu, "Edit/Redo", p->doc.canRedo() && !p->doc.readOnly);
@@ -844,7 +926,7 @@ public:
         if (page->doc.modified()) {
           auto fingerprint = std::to_string(page->revision) + ":" +
                              page->doc.encoding + ":" + page->doc.eol + ":" +
-                             std::to_string(page->doc.bom);
+                             std::to_string(page->doc.bom)+(page->remote?page->remote->readUrl+page->remote->pushUrl+page->remote->baseline:"");
           if (fingerprint == page->recoveryFingerprint &&
               !page->recovery.empty() && fs::exists(page->recovery))
             continue;
@@ -859,7 +941,8 @@ public:
                            {"text", page->doc.text()},
                            {"encoding", page->doc.encoding},
                            {"eol", page->doc.eol},
-                           {"bom", page->doc.bom}}
+                           {"bom", page->doc.bom},
+                           {"remote",page->remote?Json{{"read",page->remote->readUrl},{"push",page->remote->pushUrl},{"baseline",page->remote->baseline},{"mime",page->remote->mime},{"identity",identityJson(page->remote->identity)}}:Json()}}
                           .dump(),
                       true);
           page->recoveryFingerprint = fingerprint;
@@ -885,9 +968,11 @@ public:
         if (pid > 0 && (kill(pid, 0) == 0 || errno == EPERM))
           continue;
         auto path = j.value("path", std::string());
+        std::string display=path;
+        if(j.contains("remote") && j["remote"].is_object())display=j["remote"].value("read",path);
         int answer = fl_choice("Recover unsaved edits for %s?",
                                "Keep for later", "Recover", "Discard",
-                               path.empty() ? "Untitled" : path.c_str());
+                               display.empty() ? "Untitled" : display.c_str());
         if (answer == 2) {
           fs::remove(entry.path());
           continue;
@@ -916,6 +1001,13 @@ public:
           if (j.contains("disk_digest"))
             p->doc.restoreDigest(j["disk_digest"]);
           p->doc.replace(0, p->doc.length(), j.value("text", std::string()));
+          if(j.contains("remote") && j["remote"].is_object()) {
+            auto r=j["remote"];RemoteDocument remote;
+            remote.readUrl=smallnet::parse(r.at("read")).reading().str();
+            remote.pushUrl=smallnet::parse(r.at("push")).writing().str();
+            remote.baseline=r.value("baseline","");remote.mime=r.value("mime","text/gemini");
+            remote.identity=identityFromJson(r.value("identity",Json::object()));p->remote=remote;p->doc.path.clear();
+          }
           p->recovery = entry.path();
           p->refresh();
         }
@@ -925,6 +1017,8 @@ public:
     }
   }
 };
+#include "remote-window.inc"
+
 Page::Page(Window *w, int x, int y, int width, int height)
     : Fl_Group(x, y, width, height, "Untitled"), owner(w) {
   first = new Editor(x, y, width, height);
@@ -952,7 +1046,7 @@ Page::Page(Window *w, int x, int y, int width, int height)
 }
 void Page::labelChanged() {
   std::string value =
-      (doc.path.empty() ? "Untitled" : doc.path.filename().string()) +
+      displayName() +
       (doc.modified() ? " *" : "");
   copy_label(value.c_str());
   owner->updateTitle();
@@ -1042,7 +1136,8 @@ void Page::applyFont() {
 void Page::highlight() {
   const auto source = doc.text();
   detectedLanguage = language == highlight::Language::Automatic
-      ? highlight::detect(doc.path, source) : language;
+      ? highlight::detect(displayPath(), source) : language;
+  if(remote && language==highlight::Language::Automatic && remote->mime=="text/gemini")detectedLanguage=smallnet::parse(remote->readUrl).scheme=="spartan"?highlight::Language::Spartan:highlight::Language::Gemini;
   auto colors = highlight::colorize(source, syntax ? detectedLanguage : highlight::Language::Plain);
   char *previous = style.text();
   const size_t oldSize = style.length();
@@ -1058,7 +1153,7 @@ void Page::highlight() {
     first->redisplay_range(firstChanged, end);
     second->redisplay_range(firstChanged, end);
   }
-  highlightedPath = doc.path;
+  highlightedPath = displayPath();
   styled = revision;
 }
 
@@ -1173,7 +1268,7 @@ int main(int argc, char **argv) try {
   for (int i = 1; i < argc; i++) {
     std::string arg = argv[i];
     if (arg == "--version") {
-      puts("XNEdit XR 0.1.0 FLTK / upstream 0ffad9c2");
+      puts("XNEdit XR 0.2.0 FLTK / upstream 0ffad9c2");
       return 0;
     }
     if (arg == "--build-options") {
@@ -1183,7 +1278,7 @@ int main(int argc, char **argv) try {
 #else
            "OFF"
 #endif
-           " UPSTREAM_BUFFER=ON UPSTREAM_REGEX=ON EDITORCONFIG=ON");
+           " UPSTREAM_BUFFER=ON UPSTREAM_REGEX=ON EDITORCONFIG=ON REMOTE=GEMINI,TITAN,SPARTAN");
       return 0;
     }
     if (arg == "--x11")
@@ -1217,7 +1312,8 @@ int main(int argc, char **argv) try {
   dx::init();
   Window window;
   for (auto &[file, n] : files)
-    window.open(file, encoding, n, readOnly);
+    if(g_ascii_strncasecmp(file.c_str(),"gemini://",9)==0 || g_ascii_strncasecmp(file.c_str(),"spartan://",10)==0)window.retrieveRemote(file,nullptr,readOnly);
+    else window.open(file, encoding, n, readOnly);
   if (!window.current())
     window.newDocument();
   dx::style(&window);

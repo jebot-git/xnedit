@@ -1,6 +1,19 @@
 CHANGELOG
 =========
 
+XNEdit XR 0.2.0 (2026-10-24)
+--------------------------
+
+ - Retrieve UTF-8 Gemini pages into editable tabs and publish through Titan.
+ - Retrieve, edit and upload Spartan pages over plaintext TCP, rejecting empty
+   uploads and query-bearing editing URLs before any network request.
+ - Verify Spartan publication redirects and require confirmation on conflicts;
+   preserve remote URLs and revisions in editor recovery copies.
+ - Support certificate trust, PEM/Penguin Mail identities, conflict checks,
+   background cancellation and remote recovery without persisting tokens/keys.
+ - Keep newer edits modified when an earlier snapshot finishes uploading.
+ - Release EditorConfig section/value nodes after loading local preferences.
+
 version 1.6.3 (2025-03-21)
 --------------------------
 
