@@ -68,8 +68,26 @@ struct Page : Fl_Group {
   Document doc;
   std::optional<RemoteDocument> remote;
   std::string remoteToken;
-  fs::path displayPath() const { return remote ? fs::path(smallnet::parse(remote->readUrl).path) : doc.path; }
-  std::string displayName() const { auto name=displayPath().filename().string();return remote?(name.empty()?smallnet::parse(remote->readUrl).host:name)+(smallnet::parse(remote->readUrl).scheme=="spartan"?" (Spartan)":" (Gemini)"):doc.path.empty()?"Untitled":name; }
+  fs::path displayPath() const {
+    if(!remote)return doc.path;
+    auto url=smallnet::parse(remote->readUrl);
+    if(smallnet::streamProtocol(url))return fs::path(url.host+".txt");
+    char *decoded=g_uri_unescape_string(url.path.c_str(),nullptr);
+    std::string path=decoded?decoded:url.path;g_free(decoded);
+    for(char &c:path)if(static_cast<unsigned char>(c)<32 || c==127)c='?';
+    return fs::path(path);
+  }
+  std::string displayName() const {
+    auto name=displayPath().filename().string();
+    if(!remote)return doc.path.empty()?"Untitled":name;
+    auto url=smallnet::parse(remote->readUrl);
+    auto protocol=url.scheme;
+    if(protocol=="scp" || protocol=="sftp" || protocol=="ssh" || protocol=="http" || protocol=="https" || protocol=="ftp" || protocol=="ftps" || protocol=="tcp")
+      std::transform(protocol.begin(),protocol.end(),protocol.begin(),g_ascii_toupper);
+    else if(protocol=="nc")protocol="nc/TCP";
+    else protocol[0]=g_ascii_toupper(protocol[0]);
+    return (smallnet::streamProtocol(url) || name.empty()?url.host:name)+" ("+protocol+")";
+  }
   Fl_Text_Buffer text, style;
   Editor *first, *second;
   Editor *active = nullptr;
@@ -656,7 +674,7 @@ public:
       if (name == "New")
         newDocument();
       else if ((name == "Retrieve page..." || name == "Retrieve Gemini page...")) {
-        auto url=fl_input("Gemini or Spartan URL to retrieve:",lastRemoteUrl.c_str());if(url)retrieveRemote(url);
+        auto url=fl_input("Remote URL to retrieve:",lastRemoteUrl.c_str());if(url)retrieveRemote(url);
       } else if ((name == "Push document..." || name == "Push via Titan...")) pushRemote(p,true);
       else if (name == "Connection settings...") showRemoteIdentity();
       else if (name == "Cancel transfer") {pendingRetrievals.clear();if(remoteJob)g_cancellable_cancel(remoteJob->cancel.get());}
@@ -832,7 +850,10 @@ public:
         fl_message("Native FLTK: tabs, split views, undo/redo, "
                    "search/replace,\nsyntax highlighting, encoding and line "
                    "endings, EditorConfig,\nrecovery copies, clipboard and "
-                   "primary selection.\n\nThe macro interpreter and remote xnc "
+                   "primary selection.\n\nRemote: SSH/SCP/SFTP, HTTP(S), FTP(S), nc/TCP, Telnet,\n"
+                   "Finger, Gemini/Titan, Gopher/Gopher+, Nex, Spartan and Scroll.\n"
+                   "Use the existing Remote menu to retrieve, push, reload or cancel.\n\n"
+                   "The macro interpreter and remote xnc "
                    "service are outside this fork.\n"
                    "Rectangular selection and custom highlight-pattern dialogs "
                    "are not yet exposed.\n"
@@ -906,9 +927,10 @@ public:
                                                       : "") +
         (p->remote ? p->remote->readUrl : p->doc.path.empty() ? "Untitled" : p->doc.path.string());
     if (searchOpen && !searchFeedback.empty()) info += " · " + searchFeedback;
-    if(remoteJob)info+=" · Remote transfer in progress";
-    else if(!remoteFeedback.empty())info+=" · "+remoteFeedback;
+    if(remoteJob)info="Remote transfer in progress · "+info;
+    else if(!remoteFeedback.empty())info=remoteFeedback+" · "+info;
     status.copy_label(info.c_str());
+    status.copy_tooltip(info.c_str());
     dx::enable_menu(menu, "Edit/Undo", p->doc.canUndo() && !p->doc.readOnly);
     dx::enable_menu(menu, "Edit/Redo", p->doc.canRedo() && !p->doc.readOnly);
     dx::enable_menu(menu, "File/Save", !p->doc.readOnly);
@@ -1004,7 +1026,8 @@ public:
           if(j.contains("remote") && j["remote"].is_object()) {
             auto r=j["remote"];RemoteDocument remote;
             remote.readUrl=smallnet::parse(r.at("read")).reading().str();
-            remote.pushUrl=smallnet::parse(r.at("push")).writing().str();
+            remote.pushUrl=r.value("push",std::string());
+            if(!remote.pushUrl.empty())remote.pushUrl=smallnet::parse(remote.pushUrl).writing().str();
             remote.baseline=r.value("baseline","");remote.mime=r.value("mime","text/gemini");
             remote.identity=identityFromJson(r.value("identity",Json::object()));p->remote=remote;p->doc.path.clear();
           }
@@ -1138,6 +1161,10 @@ void Page::highlight() {
   detectedLanguage = language == highlight::Language::Automatic
       ? highlight::detect(displayPath(), source) : language;
   if(remote && language==highlight::Language::Automatic && remote->mime=="text/gemini")detectedLanguage=smallnet::parse(remote->readUrl).scheme=="spartan"?highlight::Language::Spartan:highlight::Language::Gemini;
+  if(remote && language==highlight::Language::Automatic && remote->mime=="text/x-gophermap")detectedLanguage=highlight::Language::Gopher;
+  if(remote && language==highlight::Language::Automatic && remote->mime=="text/x-nex")detectedLanguage=highlight::Language::Nex;
+  if(remote && language==highlight::Language::Automatic && remote->mime=="text/x-gopherplus")detectedLanguage=highlight::Language::GopherPlus;
+  if(remote && language==highlight::Language::Automatic && remote->mime=="text/scroll")detectedLanguage=highlight::Language::Scroll;
   auto colors = highlight::colorize(source, syntax ? detectedLanguage : highlight::Language::Plain);
   char *previous = style.text();
   const size_t oldSize = style.length();
@@ -1278,7 +1305,7 @@ int main(int argc, char **argv) try {
 #else
            "OFF"
 #endif
-           " UPSTREAM_BUFFER=ON UPSTREAM_REGEX=ON EDITORCONFIG=ON REMOTE=GEMINI,TITAN,SPARTAN");
+           " UPSTREAM_BUFFER=ON UPSTREAM_REGEX=ON EDITORCONFIG=ON REMOTE=GEMINI,TITAN,SPARTAN,SCP,SFTP,SSH,FINGER,TELNET,NC,TCP,GOPHER,NEX,HTTP,HTTPS,FTP,FTPS,SCROLL,GOPHER+");
       return 0;
     }
     if (arg == "--x11")
@@ -1312,7 +1339,7 @@ int main(int argc, char **argv) try {
   dx::init();
   Window window;
   for (auto &[file, n] : files)
-    if(g_ascii_strncasecmp(file.c_str(),"gemini://",9)==0 || g_ascii_strncasecmp(file.c_str(),"spartan://",10)==0)window.retrieveRemote(file,nullptr,readOnly);
+    if(file.find("://")!=std::string::npos)window.retrieveRemote(file,nullptr,readOnly);
     else window.open(file, encoding, n, readOnly);
   if (!window.current())
     window.newDocument();

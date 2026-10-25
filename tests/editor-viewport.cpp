@@ -224,5 +224,58 @@ int main() {
     capture(*dialog,"remote-spartan-push");widget(*dialog,"Cancel")->do_callback();
     std::cout<<"PASS Native Spartan retrieve/edit/upload, syntax mode, recovery and protocol-specific push controls\n";
   }
+  for(auto pair:std::vector<std::pair<const char *,const char *>>{{"XNEDIT_HTTP_TEST_URL","HTTP"},{"XNEDIT_SFTP_TEST_URL","SFTP"}}) {
+    if(auto uri=getenv(pair.first)) {
+      auto waitRemote=[&]{auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);while(window.remoteBusy()&&std::chrono::steady_clock::now()<end){Fl::wait(.01);window.poll();}assert(!window.remoteBusy());settle();};
+      window.retrieveRemote(uri);waitRemote();auto remote=window.current();
+      assert(remote->remote && remote->doc.text()=="Original\n" && remote->doc.eol=="CRLF" && remote->remote->identity.empty());
+      std::string replacement=std::string(pair.second)+" UI 世界\n";
+      remote->doc.replace(0,remote->doc.length(),replacement);remote->refresh();
+      window.command("Save");waitRemote();assert(!remote->doc.modified() && remote->remote->readUrl==uri);
+      remote->doc.replace(remote->doc.length(),remote->doc.length(),"snapshot\n");remote->refresh();window.command("Save");
+      remote->doc.replace(remote->doc.length(),remote->doc.length(),"later\n");remote->refresh();waitRemote();assert(remote->doc.modified());
+      window.recoverSave();Json recovery;std::ifstream(remote->recovery)>>recovery;
+      assert(recovery["remote"]["read"]==uri && recovery["remote"]["push"]==uri);
+      capture(window,pair.second);
+      std::cout<<"PASS Existing Remote workflow retrieves, saves, preserves concurrent edits and recovers "<<pair.second<<" documents\n";
+    }
+  }
+  if(auto uri=getenv("XNEDIT_NC_TEST_URL")) {
+    auto waitRemote=[&]{auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);while(window.remoteBusy()&&std::chrono::steady_clock::now()<end){Fl::wait(.01);window.poll();}assert(!window.remoteBusy());settle();};
+    window.retrieveRemote(uri);waitRemote();auto remote=window.current();
+    assert(remote->remote && remote->doc.text()=="Response 世界\n");
+    remote->doc.replace(remote->doc.length(),remote->doc.length(),"raw edit\n");remote->refresh();
+    auto before=remote->doc.text();window.command("Save");settle();
+    Fl_Window *dialog=nullptr;for(auto w=Fl::first_window();w;w=Fl::next_window(w))if(std::string(w->label()?w->label():"")=="Push remote document — XNEdit XR" && w->shown())dialog=w;
+    assert(dialog && !widget(*dialog,"Token:")->active() && !widget(*dialog,"MIME type:")->active());
+    widget(*dialog,"Check and push")->do_callback();waitRemote();
+    assert(remote->doc.modified() && remote->doc.text()==before);window.recoverSave();
+
+    capture(window,"remote-nc");std::cout<<"PASS Existing Push dialog sends byte streams without clearing unsaved edits\n";
+  }
+  if(auto uri=getenv("XNEDIT_FINGER_TEST_URL")) {
+    auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);window.retrieveRemote(uri);
+    while(window.remoteBusy()&&std::chrono::steady_clock::now()<end){Fl::wait(.01);window.poll();}
+    assert(!window.remoteBusy());auto remote=window.current();
+    assert(remote->remote && remote->doc.text()=="Response 世界\n" && remote->remote->pushUrl.empty());
+    remote->doc.replace(remote->doc.length(),remote->doc.length(),"plan edit\n");remote->refresh();window.recoverSave();
+    Json recovery;std::ifstream(remote->recovery)>>recovery;assert(recovery["remote"]["push"]=="");
+    window.command("Save");settle();Fl_Window *dialog=nullptr;
+    for(auto w=Fl::first_window();w;w=Fl::next_window(w))if(std::string(w->label()?w->label():"")=="Push remote document — XNEdit XR" && w->shown())dialog=w;
+    assert(dialog);widget(*dialog,"Cancel")->do_callback();assert(remote->doc.modified());
+    std::cout<<"PASS Finger retrieval remains editable and Save offers the existing upload destination dialog\n";
+  }
+  for(auto pair:std::vector<std::pair<const char *,highlight::Language>>{{"XNEDIT_SCROLL_TEST_URL",highlight::Language::Scroll},{"XNEDIT_PLUS_TEST_URL",highlight::Language::GopherPlus}}) {
+    if(auto uri=getenv(pair.first)) {
+      auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);window.retrieveRemote(uri);
+      while(window.remoteBusy()&&std::chrono::steady_clock::now()<end){Fl::wait(.01);window.poll();}
+      assert(!window.remoteBusy());auto remote=window.current();
+      assert(remote->remote && remote->remote->pushUrl.empty() && remote->detectedLanguage==pair.second);
+      if(pair.second==highlight::Language::Scroll)assert(remote->doc.text()=="# Scroll\n* Content 世界\n");
+      else assert(remote->doc.text().find("+INFO:")==0);
+      capture(window,pair.second==highlight::Language::Scroll?"remote-scroll":"remote-gopherplus");
+      std::cout<<"PASS Existing Remote menu retrieves and selects "<<highlight::name(pair.second)<<" syntax\n";
+    }
+  }
   window.hide();
 }

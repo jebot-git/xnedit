@@ -82,7 +82,7 @@ def main():
    def push(path,body,baseline='',**kw):return run({'op':'push','url':f.titan+path,'read':f.url+path,'pins':f.pin,'baseline':baseline,'body':body,**kw})
    check(run({'op':'parse','url':'gemini://BÜCHER.example/世界.gmi'})['url']=='gemini://xn--bcher-kva.example/%E4%B8%96%E7%95%8C.gmi','IDNA and UTF-8 URL encoding')
    check(run({'op':'parse','url':'gemini://[::1]/'})['peer']=='[::1]:1965','IPv6 origin and default port')
-   for bad in ['http://host/','gemini://user:secret@host/','gemini://host/\r\nInjected','gemini://host/%XX','gemini://host/#fragment','gemini://host:0/','gemini://local%0Ahost/']:
+   for bad in ['smtp://host/','gemini://user:secret@host/','gemini://host/\r\nInjected','gemini://host/%XX','gemini://host/#fragment','gemini://host:0/','gemini://local%0Ahost/']:
     check(not run({'op':'parse','url':bad})['ok'],'reject unsafe URL '+repr(bad))
    before=len(f.events);response=fetch(pins={});check(response['kind']=='trust' and response['fingerprint']==f.fp and len(f.events)==before,'first trust check sends no application data')
    response=fetch(pins={f'localhost:{f.port}':'0'*64});check(response['kind']=='trust' and response['previous']=='0'*64 and len(f.events)==before,'changed pin blocks request before application data')

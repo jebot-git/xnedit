@@ -64,9 +64,15 @@ class PushDialog : public dx::GpuWindow {
   Fl_Secret_Input token{130,145,600,32,"Token:"};
   Fl_Box help{20,195,710,58,"The token is optional when the server authorizes your client certificate.\nTokens are not saved in settings or recovery copies."};
   void protocol() {
-    const bool spartan=g_ascii_strncasecmp(url.value(),"spartan://",10)==0;
-    if(spartan){mime.deactivate();token.value("");token.deactivate();help.copy_label("Spartan sends the document directly without MIME or token fields.\nEmpty documents cannot be uploaded.");}
-    else {mime.activate();token.activate();help.copy_label("The token is optional when the server authorizes your client certificate.\nTokens are not saved in settings or recovery copies.");}
+    bool titan=g_ascii_strncasecmp(url.value(),"titan://",8)==0;
+    bool spartan=g_ascii_strncasecmp(url.value(),"spartan://",10)==0;
+    bool stream=g_ascii_strncasecmp(url.value(),"nc://",5)==0 || g_ascii_strncasecmp(url.value(),"tcp://",6)==0 || g_ascii_strncasecmp(url.value(),"telnet://",9)==0;
+    if(titan){mime.activate();token.activate();help.copy_label("The token is optional when the server authorizes your client certificate.\nTokens are not saved in settings or recovery copies.");}
+    else {
+      token.value("");token.deactivate();
+      if(spartan || stream)mime.deactivate();else mime.activate();
+      help.copy_label(g_ascii_strncasecmp(url.value(),"finger://",9)==0 || g_ascii_strncasecmp(url.value(),"gopher://",9)==0 || g_ascii_strncasecmp(url.value(),"nex://",6)==0 || g_ascii_strncasecmp(url.value(),"gopher+://",10)==0 || g_ascii_strncasecmp(url.value(),"scroll://",9)==0?"This protocol only retrieves text. Choose a file upload URL, such as sftp://,\nor use Save as to write a local copy.":stream?"Send these document bytes to the service. This is a byte stream, not a file save.\nThe server must close its response; edits remain unsaved after sending.":spartan?"Spartan sends the document directly without MIME or token fields.\nEmpty documents cannot be uploaded.":"File uploads check the destination and read it back to verify the saved bytes.\nSCP/SFTP use SSH keys or agent and known_hosts; HTTP/FTP can use ~/.netrc.");
+    }
     redraw();
   }
   Fl_Return_Button push{455,275,160,34,"Check and push"};

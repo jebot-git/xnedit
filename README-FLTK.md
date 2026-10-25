@@ -68,7 +68,9 @@ xnedit --version
 xnedit --build-options
 ```
 
-## Remote editing with Gemini, Titan and Spartan
+## Remote editing
+
+### Gemini, Titan and Spartan
 
 Use **Remote → Retrieve page...** (`Ctrl+Alt+O`) or launch:
 
@@ -128,7 +130,8 @@ of at most five seconds; ambiguous failures are never retried automatically.
 
 Remote preferences and certificate pins are stored privately in
 `$XDG_CONFIG_HOME/xnedit-xr/remote.json`. The network implementation uses GIO
-and OpenSSL 3; the UI remains native Wayland/FLTK with DomeD's universal menu.
+and OpenSSL 3, plus libcurl for file-oriented transports; the UI remains native
+Wayland/FLTK with DomeD's universal menu.
 
 Spartan uses plaintext TCP (port 300 by default), with the same `spartan://`
 URL for retrieval and upload. Uploads send the document bytes directly, without
@@ -145,6 +148,102 @@ missing page from other client errors.
 Publishing requires a server-side Titan or Spartan upload handler. The deployed
 `jebot.dog` services were checked for retrieval; uploads and the editor workflow
 were tested with isolated protocol fixtures without modifying public pages.
+
+### Other remote files and text services
+
+The existing **Remote → Retrieve page…**, **Push document…**, **Reload remote
+page** and **Cancel transfer** actions also accept the following URLs. Command-line
+URLs open through the same asynchronous workflow. No additional menus are added.
+
+| URL scheme | Retrieve | Push / Save |
+| --- | --- | --- |
+| `scp://`, `sftp://`, `ssh://` | Remote file over SSH (`ssh` selects SFTP) | Write, then retrieve and verify exact bytes |
+| `http://`, `https://` | HTTP GET | HTTP PUT, then GET and verify; the endpoint must support PUT |
+| `ftp://`, `ftps://` | FTP download, using binary transfer to preserve text bytes | Upload, then download and verify |
+| `finger://` | Finger query, port 79 | Choose another upload URL or Save as locally |
+| `gopher://` | Gopher selector, port 70; text/menu framing is removed | Choose another upload URL or Save as locally |
+| `gopher+://` | Gopher+ item attributes, port 70 | Choose another upload URL or Save as locally |
+| `scroll://` | Scrolltext over TLS, port 5699 | Choose another upload URL or Save as locally |
+| `nex://` | Nex path, port 1900 | Choose another upload URL or Save as locally |
+| `nc://`, `tcp://` | Netcat-style byte stream; explicit port required | Send the document bytes once; keep edits unsaved |
+| `telnet://` | One-shot Telnet text service, port 23, with IAC negotiation | Send text to the service; keep edits unsaved |
+
+Examples:
+
+```sh
+xnedit 'sftp://alice@example.org/home/alice/notes.gmi'
+xnedit 'scp://alice@example.org:2222/home/alice/notes.txt'
+xnedit 'https://example.org/documents/notes.txt'
+xnedit 'finger://example.org/alice'
+xnedit 'gopher://example.org/0/notes.txt'
+xnedit 'nex://example.org/notes.txt'
+xnedit 'gopher+://example.org/0/notes.txt'
+xnedit 'scroll://example.org/page.scroll'
+xnedit 'nc://127.0.0.1:7000/request%0D%0A'
+```
+
+Use percent encoding for spaces, Unicode filenames and request controls. For
+`nc`, `tcp` and `telnet`, the decoded URL path after its first slash is the exact
+retrieval request, with no implicit newline. `/` sends no request. **Push** sends
+only the current document bytes, not that retrieval request. TCP half-closes its
+outgoing side after writing; Telnet keeps it available for option negotiations.
+Telnet applies NVT CRLF/CR-NUL conversion and strips IAC negotiations.
+The server must close its response to finish the transfer. Interactive Telnet
+login sessions need an interactive terminal. These streams do not define a file
+save operation, so the existing Push dialog always asks before sending and a
+successful send never clears modified/recovery state. Finger accepts `/alice` or
+`alice@host` URL user information and sends a CRLF-terminated query.
+
+SSH transfers use libcurl's SSH support, your SSH agent or the first available
+`~/.ssh/id_ed25519`, `id_ecdsa` or `id_rsa`, and OpenSSH-format
+`~/.ssh/known_hosts`. Unknown or mismatching host keys stop the transfer; establish
+host trust with `ssh` first. Agent-backed keys can remain encrypted. The URL names
+the host, username and port explicitly; libcurl does not read OpenSSH host aliases,
+ProxyJump or other `~/.ssh/config` settings. HTTP/FTP credentials may come from a
+private `~/.netrc`. Passwords in URLs are rejected and no new credential store is
+created. HTTPS and FTPS retain normal CA/hostname verification. FTPS uses implicit
+TLS (port 990 by default). Connection settings in the existing menu explain
+these authentication sources when a non-Gemini remote tab is selected.
+
+File saves compare the destination bytes with the retrieval baseline before
+writing. A changed or existing destination without a matching baseline needs the
+existing overwrite confirmation; creating a missing destination also needs
+confirmation. The uploaded bytes are retrieved again before marking a document
+saved. A failed or unverifiable write keeps edits modified. Preflight checking is
+not an atomic server-side compare-and-swap, and these file uploads are not atomic
+replacements: a failed upload can leave partial remote contents. No failed write
+is retried automatically. Edits made while saving retain their dirty state after
+the earlier snapshot is verified.
+
+The shared 8 MiB limit, 20-second timeout, Cancel action, UTF-8 text validation,
+BOM/line-ending preservation, private recovery and Save as local copy apply to
+these transports. File retrieval also accepts structured text MIME types such as
+JSON and XML. HTTP redirects are returned for explicit review, not followed.
+Scroll uses the existing TOFU/client-identity settings. Its request includes a
+BCP47 language list derived from the desktop locale, falling back to `en`. Its
+author and publication/modification header lines are parsed separately from the
+editable body. Same-server redirects work; other destinations require explicit
+retrieval. A `text/scroll` response selects Scroll syntax even without a filename
+extension. Scroll is retrieval-only here; choose a Titan or other upload endpoint
+to publish edited text.
+
+`gopher+://` requests item attributes using `TAB !`. Byte-count, period and EOF
+Gopher+ framing is checked and removed; attribute text selects the Gopher+ mode.
+Standard `gopher://` URLs containing an encoded Gopher+ command, such as
+`gopher://host/0/item%09!`, also work. Gopher+ is retrieval-only here. The Scroll
+and Gopher+ handlers follow the linked specifications in the syntax section.
+
+Raw stream request URLs are kept in the same private remote settings/recovery
+metadata as other remote URLs. All six supported smallnet document formats select
+their syntax modes from their response type or filename.
+
+Building these handlers requires `libcurl` development files, with SCP/SFTP
+support enabled for SSH transfers. The implementations use native sockets/GIO and
+libcurl; no local shell command is formed from document contents or URLs.
+Transport references: [libcurl upload](https://curl.se/libcurl/c/CURLOPT_UPLOAD.html),
+[SSH host verification](https://curl.se/libcurl/c/CURLOPT_SSH_KNOWNHOSTS.html),
+[Finger RFC 1288](https://www.rfc-editor.org/rfc/rfc1288), and
+[Telnet RFC 854](https://www.rfc-editor.org/rfc/rfc854).
 
 ## Syntax highlighting
 

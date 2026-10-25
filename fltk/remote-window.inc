@@ -36,9 +36,9 @@ void Window::startRemote(RemoteOperation operation) {
 void Window::retrieveRemote(const std::string &url,Page *replace,bool readOnly) {
   if(remoteJob && replace){remoteFeedback="A transfer is already running.";return;}
   try {
-    auto parsed=smallnet::parse(url);if(parsed.scheme!="gemini" && parsed.scheme!="spartan")throw std::runtime_error("Retrieve requires a gemini:// or spartan:// URL");
-    RemoteOperation operation;operation.document.readUrl=parsed.str();operation.document.pushUrl=parsed.writing().str();
-    operation.document.identity=parsed.scheme=="spartan"?smallnet::Identity{}:replace&&replace->remote?replace->remote->identity:remoteIdentity;
+    auto parsed=smallnet::parse(url);if(!smallnet::canRetrieve(parsed))throw std::runtime_error("This URL is upload-only");
+    RemoteOperation operation;operation.document.readUrl=parsed.str();operation.document.pushUrl=smallnet::uploadUrl(parsed);
+    operation.document.identity=parsed.scheme!="gemini" && parsed.scheme!="scroll"?smallnet::Identity{}:replace&&replace->remote?replace->remote->identity:remoteIdentity;
     operation.page=replace;operation.readOnly=replace?replace->doc.readOnly:readOnly;
     if(replace){operation.generation=replace->doc.generation();operation.encoding=replace->doc.encoding;operation.eol=replace->doc.eol;operation.bom=replace->doc.bom;}
     lastRemoteUrl=parsed.str();saveRemoteSettings();if(remoteJob)pendingRetrievals.push_back(std::move(operation));else startRemote(std::move(operation));
@@ -46,7 +46,9 @@ void Window::retrieveRemote(const std::string &url,Page *replace,bool readOnly) 
 }
 void Window::showRemoteIdentity() {
   if(remoteJob){remoteFeedback="Finish or cancel the transfer before changing its identity.";return;}
-  if(auto page=current();page&&page->remote&&smallnet::parse(page->remote->readUrl).scheme=="spartan"){remoteFeedback="Spartan does not use client identities.";return;}
+  if(auto page=current();page&&page->remote&&smallnet::parse(page->remote->readUrl).scheme!="gemini" && smallnet::parse(page->remote->readUrl).scheme!="scroll") {
+    fl_message("SCP/SFTP/SSH use your SSH agent or ~/.ssh/id_ed25519, id_ecdsa or id_rsa, and verified ~/.ssh/known_hosts.\nHTTP(S)/FTP(S) can use a private ~/.netrc. Passwords are not accepted in URLs.\nFinger, Gopher, Nex, nc/TCP and Telnet do not use Gemini client identities.\nTransfers have a 20-second timeout and an 8 MiB limit.");return;
+  }
   if(!connectionDialog)connectionDialog=std::make_unique<ConnectionDialog>();
   auto page=current();
   connectionDialog->values(page&&page->remote?page->remote->identity:remoteIdentity);
@@ -66,21 +68,22 @@ void Window::pushRemote(Page *page,bool prompt) {
     try {
       if(std::find(pages.begin(),pages.end(),page)==pages.end())throw std::runtime_error("The source tab was closed");
       if(page->doc.length()>int(smallnet::maxBytes))throw std::runtime_error("Remote pushes are limited to 8 MiB");
-      auto target=smallnet::parse(uri);if(target.scheme!="titan" && target.scheme!="spartan")throw std::runtime_error("Push requires a titan:// or spartan:// URL");
+      auto target=smallnet::parse(uri);if(!smallnet::canPush(target))throw std::runtime_error("This protocol retrieves text only. Choose an upload URL such as sftp://, or Save as locally");
       if(target.scheme=="spartan" && page->doc.length()==0)throw std::runtime_error("Empty Spartan documents cannot be uploaded");
       RemoteOperation operation;operation.kind=RemoteOperation::Push;operation.page=page;
       operation.wasRemote=bool(page->remote);
       if(page->remote)operation.document=*page->remote;
-      else {operation.document.readUrl=target.reading().str();operation.document.identity=target.scheme=="spartan"?smallnet::Identity{}:remoteIdentity;}
+      else {operation.document.readUrl=target.reading().str();operation.document.identity=target.scheme!="titan"?smallnet::Identity{}:remoteIdentity;}
       operation.document.pushUrl=target.str();operation.document.mime=mime;
       operation.snapshot=page->doc.text();operation.encoding=page->doc.encoding;operation.eol=page->doc.eol;operation.bom=page->doc.bom;
       operation.bytes=encodeFile(operation.snapshot,operation.encoding,operation.bom,operation.eol);
       page->remoteToken=token;operation.token=std::move(token);startRemote(std::move(operation));
     }catch(const std::exception &e){report(e.what());}
   };
+  if(page->remote && (page->remote->pushUrl.empty() || smallnet::streamProtocol(smallnet::parse(page->remote->readUrl))))prompt=true;
   if(prompt || !page->remote) {
     if(!pushDialog)pushDialog=std::make_unique<PushDialog>();
-    std::string uri=page->remote?page->remote->pushUrl:smallnet::parse(lastRemoteUrl).writing().str();
+    std::string uri=page->remote?(page->remote->pushUrl.empty()?page->remote->readUrl:page->remote->pushUrl):smallnet::parse(lastRemoteUrl).writing().str();
     pushDialog->values(uri,page->remote?page->remote->mime:"text/gemini");pushDialog->use=begin;pushDialog->show();
   } else begin(page->remote->pushUrl,page->remote->mime,page->remoteToken);
 }
@@ -115,16 +118,20 @@ void Window::finishRemote() {
       auto page=operation.page;
       if(page && (page->doc.generation()!=operation.generation || page->doc.encoding!=operation.encoding || page->doc.eol!=operation.eol || page->doc.bom!=operation.bom))page=nullptr;
       if(!page){page=current();if(!page || page->doc.modified() || page->remote || !page->doc.path.empty() || page->doc.length())page=newDocument();}
-      auto remote=operation.document;remote.readUrl=response.url;remote.pushUrl=smallnet::parse(response.url).writing().str();remote.baseline=smallnet::hash(response.body);remote.mime=mime;
+      auto remote=operation.document;remote.readUrl=response.url;remote.pushUrl=smallnet::uploadUrl(smallnet::parse(response.url));remote.baseline=smallnet::hash(response.body);remote.mime=mime;
       page->remote=remote;page->doc.path.clear();page->doc.readOnly=operation.readOnly;page->doc.encoding="UTF-8";page->doc.loadContents(response.body);page->refresh();
       tabs.value(page);page->show();page->first->take_focus();remoteFeedback="Retrieved "+std::to_string(response.body.size())+" bytes.";
     } else {
+      if(!result.published.verified) {
+        remoteFeedback="Text sent; file save unconfirmed. Edits remain unsaved.";
+        updateTitle();recoverSave();return;
+      }
       auto page=operation.page;
       bool same=operation.wasRemote?(page->remote && page->remote->readUrl==operation.document.readUrl):(!page->remote && page->doc.path.empty());
       if(!same){page=newDocument();page->doc.encoding=operation.encoding;page->doc.loadContents(operation.bytes);}
       auto remote=operation.document;remote.readUrl=result.published.readUrl;remote.baseline=result.published.digest;
       page->remote=remote;page->doc.path.clear();page->doc.markSaved(operation.snapshot,operation.encoding,operation.eol,operation.bom);
-      page->labelChanged();page->highlight();remoteFeedback=smallnet::parse(remote.readUrl).scheme=="spartan"?"Spartan upload confirmed.":"Titan push confirmed.";
+      page->labelChanged();page->highlight();remoteFeedback="Remote upload confirmed: "+smallnet::parse(remote.readUrl).scheme;
       if(!page->doc.modified() && !page->recovery.empty())fs::remove(page->recovery);
     }
     updateTitle();recoverSave();

@@ -7,6 +7,9 @@ from Xlib.ext import xtest
 from PIL import Image
 from remote import Fixture
 from spartan import Fixture as SpartanFixture
+from remote_files import Http, Stream, SshFixture
+from smallnet import ScrollFixture, PlusFixture
+import http.server,threading
 signal.pthread_sigmask(signal.SIG_SETMASK,[])
 if os.environ.get('XNEDIT_WL_BUS')!='1':os.execvpe('dbus-run-session',['dbus-run-session','--',sys.executable,*sys.argv],{**os.environ,'XNEDIT_WL_BUS':'1'})
 root=Path(__file__).resolve().parents[1];out=root/'build-fltk/wayland-test';out.mkdir(parents=True,exist_ok=True);children=[];logs=[];checks=[]
@@ -39,16 +42,35 @@ with tempfile.TemporaryDirectory(prefix='xnedit-wayland-')as tmp:
   env['WAYLAND_DISPLAY']=re.search(r'Dome Wayland socket: (\S+)',log)[1]
   remote_fixture=Fixture(Path(tmp))
   spartan_fixture=SpartanFixture()
+  file_http=http.server.ThreadingHTTPServer(('127.0.0.1',0),Http)
+  threading.Thread(target=file_http.serve_forever,daemon=True).start()
+  raw_fixture=Stream('plain');finger_fixture=Stream('plain')
+  ssh_directory=Path(tmp)/'ssh';ssh_directory.mkdir()
+  file_ssh=SshFixture(ssh_directory)
+  scroll_fixture=ScrollFixture(Path(tmp)/'scroll');scroll_fixture.context.load_verify_locations(remote_fixture.client)
+  plus_fixture=PlusFixture()
+  ssh_path=ssh_directory/'remote 世界.txt';ssh_path.write_bytes(b'Original\r\n')
+  env['HOME']=str(file_ssh.home)
+  env['XNEDIT_HTTP_TEST_URL']=f'http://127.0.0.1:{file_http.server_port}/note.txt'
+  env['XNEDIT_SFTP_TEST_URL']=file_ssh.url('sftp',ssh_path)
+  env['XNEDIT_NC_TEST_URL']=f'nc://127.0.0.1:{raw_fixture.port}/request%0D%0A'
+  env['XNEDIT_SCROLL_TEST_URL']=scroll_fixture.url+'/page.scroll'
+  env['XNEDIT_PLUS_TEST_URL']=f'gopher+://127.0.0.1:{plus_fixture.port}/doc'
+  env['XNEDIT_FINGER_TEST_URL']=f'finger://127.0.0.1:{finger_fixture.port}/alice'
+
   settings=Path(tmp)/'config/xnedit-xr';settings.mkdir(parents=True,exist_ok=True)
   identity_store=Path(tmp)/'penguin-state.json'
   identity_store.write_text(json.dumps({'identities':[{'id':'ui-test','address':'test@localhost','certificate':remote_fixture.client.read_text(),'key':remote_fixture.client_key.read_text()}]}));identity_store.chmod(0o600)
-  (settings/'remote.json').write_text(json.dumps({'pins':remote_fixture.pin,'identity':{'penguin_store':str(identity_store),'penguin_id':'ui-test'},'last_url':remote_fixture.url+'/page.gmi'}));(settings/'remote.json').chmod(0o600)
+  (settings/'remote.json').write_text(json.dumps({'pins':remote_fixture.pin|scroll_fixture.pin,'identity':{'penguin_store':str(identity_store),'penguin_id':'ui-test'},'last_url':remote_fixture.url+'/page.gmi'}));(settings/'remote.json').chmod(0o600)
   env['XNEDIT_REMOTE_TEST_URL']=remote_fixture.url+'/page.gmi'
   env['XNEDIT_SPARTAN_TEST_URL']=spartan_fixture.url+'/page.gmi'
   viewport=subprocess.run([str(root/'build-fltk/editor-viewport-test')],env={**env,'XNEDIT_UI_CAPTURE_DIR':str(out),'XDG_STATE_HOME':tmp+'/viewport-state'},capture_output=True,text=True,timeout=30)
   (out/'viewport.log').write_text(viewport.stdout+viewport.stderr)
   remote_fixture.close()
   spartan_fixture.close()
+  check(ssh_path.read_bytes().startswith('SFTP UI 世界\r\n'.encode()),'native SFTP Save publishes exact UTF-8/CRLF content')
+  check(Http.pages['/note.txt'].startswith('HTTP UI 世界\r\n'.encode()),'native HTTP Save publishes and verifies edited text')
+  check(any(b'raw edit' in data for data in raw_fixture.received),'the existing Push dialog sends edited document bytes to an nc endpoint')
   check(any(event[1]>0 and event[2].startswith(b'# Spartan UI') for event in spartan_fixture.events),'native Spartan editor uploads the edited bytes over plaintext TCP')
   check(any(event[0]=='titan' and event[2].startswith(b'# Remote UI') and event[4] for event in remote_fixture.events),'native remote editor pushes exact content with its selected client identity')
   check(viewport.returncode==0,'editor viewport, language modes, regex helper and find/replace regressions pass on native Wayland')
@@ -75,6 +97,12 @@ with tempfile.TemporaryDirectory(prefix='xnedit-wayland-')as tmp:
   check(len(set(im.getdata()))>20,'DomeD renders the editor and search controls')
   key('Escape');key('q',True);wait(lambda:app.poll()is not None);check(app.returncode==0,'native Wayland editor closes cleanly');xd.close()
  finally:
+  if 'file_http' in locals():file_http.shutdown();file_http.server_close()
+  if 'file_ssh' in locals():file_ssh.close()
+  if 'scroll_fixture' in locals():scroll_fixture.close()
+  if 'plus_fixture' in locals():plus_fixture.close()
+  for name in ['raw_fixture','finger_fixture']:
+   if name in locals():locals()[name].close()
   if "remote_fixture" in locals():remote_fixture.close()
   if "spartan_fixture" in locals():spartan_fixture.close()
   for child in reversed(children):

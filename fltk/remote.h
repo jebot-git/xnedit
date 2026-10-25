@@ -12,7 +12,7 @@ struct Identity {
   bool empty() const { return certificate.empty() && penguinId.empty(); }
 };
 struct Url {
-  std::string scheme, host, path, query;
+  std::string scheme, host, path, query, user;
   int port = 1965;
   std::string str() const;
   std::string peer() const;
@@ -33,13 +33,20 @@ struct Session {
   std::map<std::string, std::string> pins;
   GCancellable *cancel = nullptr;
   int timeoutSeconds = 20;
+  std::string languages; // Scroll BCP47 list; empty follows the desktop locale.
 };
 struct Response {
   int status = 0;
   std::string meta, body, url;
-  bool success() const { return status == 2 || status / 10 == 2; }
+  std::string author, published, modified;
+  bool success() const { return status == 2 || status / 10 == 2 || (status >= 200 && status < 300); }
 };
-struct Published { std::string readUrl, digest; Response response; };
+struct Published { std::string readUrl, digest; Response response; bool verified = true; };
+int defaultPort(const std::string &);
+bool canRetrieve(const Url &);
+bool canPush(const Url &);
+bool streamProtocol(const Url &);
+std::string uploadUrl(const Url &);
 Response fetch(const std::string &, const Session &);
 Published push(const std::string &readUrl, const std::string &titanUrl,
                const std::string &baseline, const std::string &body,
