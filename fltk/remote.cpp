@@ -11,6 +11,8 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <filesystem>
+#include <set>
 #include <memory>
 #include <mutex>
 #include <poll.h>
@@ -53,6 +55,35 @@ std::string readFile(const std::string &path,size_t limit,bool secret=false) {
 nlohmann::json store(const std::string &path) {
   try { return nlohmann::json::parse(readFile(path,8*1024*1024,true)); }
   catch (const nlohmann::json::exception &) { throw std::runtime_error("Invalid Penguin Mail identity storage"); }
+}
+nlohmann::json sharedCatalog(const std::string &path) {
+  struct stat st{};
+  if (lstat(path.c_str(), &st) && errno == ENOENT)
+    return {{"version", 1}, {"identities", nlohmann::json::array()}};
+  if (S_ISLNK(st.st_mode)) throw std::runtime_error("Shared identity catalog must not be a symbolic link");
+  auto catalog = nlohmann::json::parse(readFile(path, 1024*1024, true));
+  if (catalog.at("version") != 1 || !catalog.at("identities").is_array() || catalog.at("identities").size() > 256)
+    throw std::runtime_error("Invalid shared identity catalog");
+  std::set<std::string> seen;
+  for (const auto &entry : catalog.at("identities")) {
+    auto id = entry.at("id").get<std::string>(), name = entry.at("name").get<std::string>();
+    auto cert = entry.at("certificate").get<std::string>(), key = entry.at("key").get<std::string>();
+    if (id.size() != 64 || id.find_first_not_of("0123456789abcdef") != std::string::npos || !seen.insert(id).second ||
+        name.empty() || name.size() > 256 || std::any_of(name.begin(), name.end(), [](unsigned char c){return c < 32 || c == 127;}) ||
+        !std::filesystem::path(cert).is_absolute() || !std::filesystem::path(key).is_absolute())
+      throw std::runtime_error("Invalid shared identity catalog");
+  }
+  return catalog;
+}
+std::string certificateFingerprint(const std::string &path) {
+  auto bytes = readFile(path, 65536);
+  Ossl<BIO, BIO_free_all> input(BIO_new_mem_buf(bytes.data(), int(bytes.size())), BIO_free_all);
+  Ossl<X509, X509_free> cert(PEM_read_bio_X509(input.get(), nullptr, nullptr, nullptr), X509_free);
+  unsigned char digest[EVP_MAX_MD_SIZE]; unsigned int count=0;
+  if (!cert || !X509_digest(cert.get(), EVP_sha256(), digest, &count)) throw std::runtime_error("Invalid shared identity certificate");
+  std::string out;const char *hex="0123456789abcdef";
+  for (unsigned int i=0; i<count; ++i) {out+=hex[digest[i]>>4];out+=hex[digest[i]&15];}
+  return out;
 }
 int noPassword(char *,int,int,void *) {return 0;}
 void identity(SSL_CTX *ctx,const Identity &id) {
@@ -434,6 +465,33 @@ std::string textMime(const std::string &metadata) {
 }
 std::string hash(const std::string &s) {char *p=g_compute_checksum_for_data(G_CHECKSUM_SHA256,reinterpret_cast<const guchar *>(s.data()),s.size());std::string r=p;g_free(p);return r;}
 TrustRequired::TrustRequired(std::string p,std::string f,std::string prev,std::string name):std::runtime_error("Server certificate requires confirmation"),peer(std::move(p)),fingerprint(std::move(f)),previous(std::move(prev)),subject(std::move(name)){}
+std::string sharedIdentityCatalog() {
+  const char *data=getenv("XDG_DATA_HOME"), *home=getenv("HOME");
+  return (data && *data ? std::string(data) : std::string(home?home:"/tmp")+"/.local/share")+"/de-xr/identities/index.json";
+}
+std::vector<std::pair<std::string,std::string>> sharedIdentities(const std::string &path) {
+  std::vector<std::pair<std::string,std::string>> out;
+  auto catalog=sharedCatalog(path);
+  for (const auto &entry: catalog.at("identities")) {
+    auto id=entry.at("id").get<std::string>();
+    try {
+      if(certificateFingerprint(entry.at("certificate"))==id) out.emplace_back(id,entry.at("name").get<std::string>());
+    } catch (const std::exception &) { /* Unavailable entries cannot be adopted. */ }
+  }
+  return out;
+}
+Identity adoptSharedIdentity(const std::string &path, const std::string &id) {
+  auto catalog=sharedCatalog(path);
+  for (const auto &entry: catalog.at("identities")) if(entry.at("id")==id) {
+    Identity selected{entry.at("certificate"),entry.at("key"),"",""};
+    if(certificateFingerprint(selected.certificate)!=id) throw std::runtime_error("Shared identity certificate fingerprint changed");
+    Ossl<SSL_CTX, SSL_CTX_free> context(SSL_CTX_new(TLS_client_method()), SSL_CTX_free);
+    if(!context)throw std::runtime_error("Cannot validate shared identity");
+    identity(context.get(),selected);
+    return selected;
+  }
+  throw std::runtime_error("Choose an available shared identity");
+}
 std::vector<std::pair<std::string,std::string>> identities(const std::string &path) {
   std::vector<std::pair<std::string,std::string>> out;
   try {auto state=store(path);for(const auto &record:state.at("identities"))out.emplace_back(record.at("id").get<std::string>(),record.at("address").get<std::string>());}

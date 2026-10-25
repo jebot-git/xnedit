@@ -18,13 +18,13 @@ class ConnectionDialog : public dx::GpuWindow {
   Fl_Input store{180,190,470,32,"Penguin Mail store:"};
   Fl_Button load{660,190,90,32,"Load"};
   Fl_Choice available{180,235,570,32,"Penguin identity:"};
-  Fl_Box help{20,285,730,60,"Choose Anonymous, a PEM certificate/key pair, or an existing Penguin Mail identity.\nEncrypted PEM keys are not supported. Private keys are never copied to editor settings."};
+  Fl_Box help{20,285,730,60,"Choose Anonymous, PEM files, Penguin Mail, or shared Servo Dome identities.\nEncrypted PEM keys are not supported. Private keys are never copied to editor settings."};
   Fl_Return_Button apply{520,365,120,34,"Apply"};
   Fl_Button cancel{650,365,100,34,"Cancel"};
   std::vector<std::pair<std::string,std::string>> records;
   void fill() {
     try {
-      records=smallnet::identities(store.value());available.clear();
+      records=mode.value()==3?smallnet::sharedIdentities(smallnet::sharedIdentityCatalog()):smallnet::identities(store.value());available.clear();
       for(auto &record:records){std::string label;for(char c:record.second){label+=c;if(c=='@')label+='@';}int item=available.add("identity");available.replace(item,label.c_str());}
       if(!records.empty())available.value(0);
     } catch(const std::exception &e){fl_alert("%s",e.what());}
@@ -32,8 +32,12 @@ class ConnectionDialog : public dx::GpuWindow {
 public:
   std::function<void(smallnet::Identity)> use;
   ConnectionDialog():dx::GpuWindow(780,420,"Remote identity — XNEdit XR") {
-    end();set_modal();mode.add("Anonymous|PEM files|Penguin Mail");mode.value(0);
+    end();set_modal();mode.add("Anonymous|PEM files|Penguin Mail|Shared identities");mode.value(0);
     mode.tooltip("Applies to the current remote document and subsequent retrievals.");
+    mode.callback([](Fl_Widget *,void *p){auto s=static_cast<ConnectionDialog *>(p);
+      s->available.copy_label(s->mode.value()==3?"Shared identity:":"Penguin identity:");
+      if(s->mode.value()==3)s->fill();else {s->records.clear();s->available.clear();}
+    },this);
     certificate.tooltip("Public client certificate in PEM format");key.tooltip("Owner-only PEM private key; it may be the same combined PEM file");
     store.tooltip("Penguin Mail misfin/state.json; identity data remains in that private store");
     help.align(FL_ALIGN_LEFT|FL_ALIGN_INSIDE);help.box(FL_FLAT_BOX);
@@ -43,6 +47,9 @@ public:
     apply.callback([](Fl_Widget *,void *p){auto s=static_cast<ConnectionDialog *>(p);smallnet::Identity identity;
       if(s->mode.value()==1){identity.certificate=s->certificate.value();identity.key=s->key.value();if(identity.certificate.empty()||identity.key.empty()){fl_alert("Choose both certificate and key files.");return;}}
       if(s->mode.value()==2){int n=s->available.value();if(n<0 || n>=int(s->records.size())){fl_alert("Load and choose a Penguin Mail identity.");return;}identity.penguinStore=s->store.value();identity.penguinId=s->records[n].first;}
+      if(s->mode.value()==3){int n=s->available.value();if(n<0||n>=int(s->records.size())){fl_alert("Load and choose a shared identity.");return;}
+        try{identity=smallnet::adoptSharedIdentity(smallnet::sharedIdentityCatalog(),s->records[n].first);}
+        catch(const std::exception &e){fl_alert("%s",e.what());return;}}
       s->hide();if(s->use)s->use(identity);
     },this);
     cancel.callback([](Fl_Widget *,void *p){static_cast<ConnectionDialog *>(p)->hide();},this);

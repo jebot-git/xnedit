@@ -10,6 +10,8 @@ int main(){
  try {
   std::string line;std::getline(std::cin,line);auto r=Json::parse(line);auto op=r.at("op").get<std::string>();
   if(op=="mime"){output={{"ok",true},{"mime",smallnet::textMime(r.at("meta"))}};}
+  else if(op=="shared-identities"){output={{"ok",true},{"identities",smallnet::sharedIdentities(r.at("catalog"))}};}
+  else if(op=="adopt-shared"){auto id=smallnet::adoptSharedIdentity(r.at("catalog"),r.at("identity"));output={{"ok",true},{"certificate",id.certificate},{"key",id.key}};}
   else if(op=="identities"){output={{"ok",true},{"identities",smallnet::identities(r.at("store"))}};}
   else if(op=="parse"){auto u=smallnet::parse(r.at("url"));output={{"ok",true},{"url",u.str()},{"peer",u.peer()}};}
   else {

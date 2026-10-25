@@ -371,3 +371,16 @@ or display-manager session is restarted.
 
 GPL-2.0-or-later, retaining upstream notices and exceptions. Shared de-xr UI hooks
 are MIT; see NOTICE-FLTK.md and UPSTREAM.json.
+
+## Shared PEM identities
+
+The remote identity dialog also offers **Shared identities** from
+`$XDG_DATA_HOME/de-xr/identities/index.json`, falling back to
+`~/.local/share/de-xr/identities/index.json`. Servo Dome and Dome Identities
+publish this version 1 catalog. Load and choose an entry, then Apply to adopt
+its certificate and private-key paths for the current document and future
+retrievals. Adoption checks the certificate SHA-256 fingerprint and matching
+unencrypted private key; keys and the catalog must have owner-only permissions.
+Generic Gemini certificates work here even when they do not name a Misfin
+mailbox. Settings retain paths rather than key bytes. Nothing is selected or
+used for a connection until you Apply it.

@@ -53,4 +53,7 @@ Published push(const std::string &readUrl, const std::string &titanUrl,
                const std::string &mime, const std::string &token,
                const Session &, bool overwrite = false);
 std::vector<std::pair<std::string,std::string>> identities(const std::string &store);
+std::string sharedIdentityCatalog();
+std::vector<std::pair<std::string,std::string>> sharedIdentities(const std::string &catalog);
+Identity adoptSharedIdentity(const std::string &catalog, const std::string &id);
 }
